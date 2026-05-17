@@ -1,0 +1,1216 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Informes A&amp;M Corporativo</title>
+  <meta name="description" content="Informes A&M Corporativo — A&M Soluciones Corporativas SAS"/>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#070D1A;color:#F0F4FF;font-family:'Segoe UI',system-ui,sans-serif}
+    #splash{position:fixed;inset:0;background:#070D1A;display:flex;flex-direction:column;
+      align-items:center;justify-content:center;z-index:9999;gap:12px;transition:opacity 0.5s}
+    #splash h1{font-size:28px;font-weight:900;color:#F0F4FF;letter-spacing:-0.5px;text-align:center}
+    #splash h1 span{color:#00E5C3}
+    #splash p{color:#5A6E99;font-size:11px;letter-spacing:0.15em;text-transform:uppercase}
+    .sp{width:44px;height:44px;border:3px solid #111E35;
+      border-top-color:#00E5C3;border-radius:50%;animation:sp 0.8s linear infinite}
+    @keyframes sp{to{transform:rotate(360deg)}}
+    ::-webkit-scrollbar{width:5px;height:5px}
+    ::-webkit-scrollbar-track{background:#070D1A}
+    ::-webkit-scrollbar-thumb{background:#1a2a45;border-radius:3px}
+    button:focus{outline:none}
+    tr:hover td{background:rgba(79,158,255,0.04)!important}
+    @keyframes spin{to{transform:rotate(360deg)}}
+  </style>
+</head>
+<body>
+  <div id="splash">
+    <div class="sp"></div>
+    <h1>Informes <span>A&amp;M</span> Corporativo</h1>
+    <p>A&amp;M Soluciones Corporativas SAS</p>
+  </div>
+  <div id="root"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+  <script>
+const { useState, useRef, useCallback, useEffect } = React;
+const T = {
+    bg: "#070D1A", bgCard: "#0D1629", bgPanel: "#111E35",
+    border: "rgba(99,132,199,0.18)", borderHi: "rgba(99,132,199,0.35)",
+    accent: "#4F9EFF", accentGlow: "rgba(79,158,255,0.25)",
+    teal: "#00E5C3", tealGlow: "rgba(0,229,195,0.2)",
+    gold: "#FFB547", red: "#FF5E7A", purple: "#A78BFA",
+    white: "#F0F4FF", muted: "#5A6E99", dimtxt: "#8BA0CC",
+};
+const money = (n) => new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 })
+    .format(n !== null && n !== void 0 ? n : 0).replace("COP", "").trim();
+const moneyFull = (n) => new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", minimumFractionDigits: 2 })
+    .format(n !== null && n !== void 0 ? n : 0).replace("COP", "$").trim();
+const pct = (a, b) => b !== 0 ? ((a / b) * 100).toFixed(1) : "0.0";
+const ABS = Math.abs;
+function loadXLSX() {
+    return new Promise((res, rej) => {
+        if (window.XLSX) {
+            res(window.XLSX);
+            return;
+        }
+        const s = document.createElement("script");
+        s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+        s.onload = () => res(window.XLSX);
+        s.onerror = () => rej(new Error("No se pudo cargar el lector de Excel"));
+        document.head.appendChild(s);
+    });
+}
+function parseNum(v) {
+    if (v === null || v === undefined || v === "")
+        return 0;
+    if (typeof v === "number")
+        return isNaN(v) ? 0 : v;
+    const s = String(v).replace(/\s/g, "").replace(/\./g, "").replace(/,/g, ".");
+    const n = parseFloat(s);
+    return isNaN(n) ? 0 : n;
+}
+function normStr(s) {
+    return String(s || "").toLowerCase()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+}
+function getTipo(cod, deb, cred) {
+    const f = String(cod).replace(/\D/g, "").charAt(0);
+    if (f === "1")
+        return "ACTIVO";
+    if (f === "2")
+        return "PASIVO";
+    if (f === "3")
+        return "PATRIMONIO";
+    if (f === "4")
+        return (deb > 0 && cred === 0) ? "DEVOLUCION" : "INGRESO";
+    if (f === "5")
+        return "GASTO";
+    if (f === "6")
+        return "COSTO";
+    if (f === "7")
+        return "COSTO";
+    return null;
+}
+function getCell(ws, XLSX, c, r) {
+    const addr = XLSX.utils.encode_cell({ c, r });
+    const cel = ws[addr];
+    if (!cel)
+        return "";
+    return cel.v !== undefined ? cel.v : "";
+}
+async function processExcel(file) {
+    const XLSX = await loadXLSX();
+    const ws = await new Promise((res, rej) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const wb = XLSX.read(new Uint8Array(e.target.result), { type: "array" });
+                res(wb.Sheets[wb.SheetNames[0]]);
+            }
+            catch (err) {
+                rej(new Error("Error leyendo Excel: " + err.message));
+            }
+        };
+        reader.onerror = () => rej(new Error("No se pudo abrir el archivo"));
+        reader.readAsArrayBuffer(file);
+    });
+    const range = XLSX.utils.decode_range(ws["!ref"] || "A1:H300");
+    const nRows = range.e.r + 1;
+    const nCols = range.e.c + 1;
+    // Lee celda y elimina apostrofe inicial que Excel agrega en textos
+    function cel(c, r) {
+        const addr = XLSX.utils.encode_cell({ c, r });
+        const cell = ws[addr];
+        if (!cell)
+            return "";
+        const v = cell.v !== undefined ? cell.v : "";
+        return typeof v === "string" ? v.replace(/^'+/, "").trim() : v;
+    }
+    // Detectar fila de encabezados buscando columnas debito y credito
+    let headerRow = 7, COL_COD = 2, COL_NOM = 3, COL_SI = 4, COL_DEB = 5, COL_CRED = 6, COL_SF = 7;
+    for (let r = 0; r < Math.min(nRows, 25); r++) {
+        let dIdx = -1, cIdx = -1;
+        for (let c = 0; c < nCols; c++) {
+            const v = normStr(String(cel(c, r)));
+            if (v.includes("debito"))
+                dIdx = c;
+            if (v.includes("credito"))
+                cIdx = c;
+        }
+        if (dIdx >= 0 && cIdx >= 0) {
+            headerRow = r;
+            COL_DEB = dIdx;
+            COL_CRED = cIdx;
+            for (let c = 0; c < nCols; c++) {
+                const v = normStr(String(cel(c, r)));
+                if (v.includes("codigo"))
+                    COL_COD = c;
+                if (v.includes("nombre"))
+                    COL_NOM = c;
+                if (v.includes("saldo") && v.includes("inici"))
+                    COL_SI = c;
+                if (v.includes("saldo") && (v.includes("final") || v.includes("fin")))
+                    COL_SF = c;
+            }
+            break;
+        }
+    }
+    // Metadata: col A, filas combinadas antes del encabezado
+    // Estructura estándar del balance PUC colombiano:
+    //   Fila 1: vacía
+    //   Fila 2: "Balance de prueba general" (título del documento — NO es la empresa)
+    //   Fila 3: Nombre de la empresa (razón social)
+    //   Fila 4: NIT
+    //   Fila 5: Período
+    let empresa = "", nit = "", periodo = "";
+    const TITULOS_DOCUMENTO = ["balance de prueba", "estado de resultados", "balance general", "libro mayor"];
+    for (let r = 0; r < headerRow; r++) {
+        const txt = String(cel(0, r) || "").trim().replace(/^'+/, "");
+        if (!txt || txt.length < 3)
+            continue;
+        const txtLow = txt.toLowerCase();
+        // Saltar títulos de documento (no son el nombre de la empresa)
+        const esTitulo = TITULOS_DOCUMENTO.some(t => txtLow.includes(t));
+        if (esTitulo)
+            continue;
+        // NIT: contiene muchos dígitos
+        if (!nit && txt.match(/\d{7,}/)) {
+            nit = txt.replace(/[^0-9\-]/g, "").substring(0, 15);
+            continue;
+        }
+        // Período: tiene "de" y "a" o contiene año
+        if (!periodo && ((txtLow.includes("de ") && txtLow.includes(" a ")) ||
+            txt.includes("2025") || txt.includes("2026") || txt.includes("2024"))) {
+            periodo = txt;
+            continue;
+        }
+        // Lo que queda es el nombre de la empresa (razón social)
+        if (!empresa && !txt.match(/^\d/) && txt.length > 4) {
+            empresa = txt;
+        }
+    }
+    const dataStart = headerRow + 1;
+    // ── CUENTAS AUXILIARES (8 dígitos exactos del PUC colombiano) ────────────
+    //
+    // REGLA DE ORO — Solo movimientos del período:
+    //   Ingresos (clase 4, cred>deb):   valor = CRÉDITO del período
+    //   Devoluciones (clase 4, deb>0 y cred=0): valor = DÉBITO del período
+    //   Gastos (clase 5):               valor = DÉBITO del período
+    //   Costos (clase 6 y 7):           valor = DÉBITO del período
+    //   Activos/Pasivos/Pat (1,2,3):    valor = SALDO FINAL (posición al cierre)
+    //
+    // Si una cuenta de resultado no tiene movimiento en el período (deb=0 y cred=0),
+    // su aporte al P&L es $0 — el costeo o gasto aún no se ha registrado.
+    // Cuando el contador registre el asiento, el débito o crédito aparecerá.
+    const cuentas = [];
+    for (let r = dataStart; r < nRows; r++) {
+        const codigoRaw = String(cel(COL_COD, r) || "").trim();
+        const nombreRaw = String(cel(COL_NOM, r) || "").trim();
+        if (!codigoRaw || !nombreRaw)
+            continue;
+        if (nombreRaw.toLowerCase().startsWith("total"))
+            continue;
+        const digits = codigoRaw.replace(/\D/g, "");
+        if (digits.length !== 8)
+            continue;
+        const debito = parseNum(cel(COL_DEB, r));
+        const credito = parseNum(cel(COL_CRED, r));
+        const saldoInicial = parseNum(cel(COL_SI, r));
+        const saldoFinal = ABS(parseNum(cel(COL_SF, r)));
+        const tipo = getTipo(codigoRaw, debito, credito);
+        if (!tipo)
+            continue;
+        // Valor a usar según tipo de cuenta
+        let valor;
+        if (tipo === "INGRESO")
+            valor = credito; // movimiento período
+        else if (tipo === "DEVOLUCION")
+            valor = debito; // movimiento período
+        else if (tipo === "GASTO")
+            valor = debito; // movimiento período
+        else if (tipo === "COSTO")
+            valor = debito; // movimiento período
+        else
+            valor = saldoFinal; // posición al cierre (balance)
+        cuentas.push({
+            codigo: codigoRaw, nombre: nombreRaw, tipo,
+            saldoInicial, debito, credito,
+            saldoFinal: valor // campo reutilizado para el valor del período
+        });
+    }
+    if (cuentas.length === 0) {
+        throw new Error("No se encontraron cuentas auxiliares (8 digitos). " +
+            "Asegurate de subir el Balance de Prueba General (no el libro de movimientos).");
+    }
+    // ── GRUPOS (2 dígitos) para indicadores — usa SALDO FINAL (posición) ────
+    const grupos = {};
+    for (let r = dataStart; r < nRows; r++) {
+        const codigoRaw = String(cel(COL_COD, r) || "").trim();
+        const nombreRaw = String(cel(COL_NOM, r) || "").trim();
+        if (!codigoRaw || !nombreRaw)
+            continue;
+        const digits = codigoRaw.replace(/\D/g, "");
+        if (digits.length !== 2)
+            continue;
+        grupos[digits] = ABS(parseNum(cel(COL_SF, r)));
+    }
+    const sg = (...gs) => gs.reduce((s, g) => s + (grupos[g] || 0), 0);
+    // PUC: AC=11+12+13+14 | ANC=15-19 | PC=22-28 | PNC=21+29
+    const activoCorriente = sg("11", "12", "13", "14");
+    const activoNoCorriente = sg("15", "16", "17", "18", "19");
+    const pasivoCorriente = sg("22", "23", "24", "25", "26", "27", "28");
+    const pasivoNoCorriente = sg("21", "29");
+    const efectivoGrupo = sg("11", "12");
+    const cuentasXCobrar = sg("13");
+    const inventariosGrupo = sg("14");
+    const totalActivos = activoCorriente + activoNoCorriente;
+    const totalPasivos = pasivoCorriente + pasivoNoCorriente;
+    const totalPatrimonio = sg("31", "32", "33", "34", "35", "36", "37", "38", "39");
+    // ── P&L DEL PERÍODO ───────────────────────────────────────────────────────
+    const sum = (t) => cuentas.filter(c => c.tipo === t).reduce((s, c) => s + c.saldoFinal, 0);
+    const totalIngresos = sum("INGRESO");
+    const totalDevoluciones = sum("DEVOLUCION");
+    const totalCostoVentas = sum("COSTO");
+    const totalGastos = sum("GASTO");
+    const ingresosNetos = totalIngresos - totalDevoluciones;
+    const utilidadBruta = ingresosNetos - totalCostoVentas;
+    const utilidadNeta = utilidadBruta - totalGastos;
+    const margenBruto = ingresosNetos > 0 ? (utilidadBruta / ingresosNetos) * 100 : 0;
+    const margenNeto = ingresosNetos > 0 ? (utilidadNeta / ingresosNetos) * 100 : 0;
+    const gastosAdmin = cuentas.filter(c => c.tipo === "GASTO" && c.codigo.startsWith("51")).reduce((s, c) => s + c.saldoFinal, 0);
+    const gastosVentas = cuentas.filter(c => c.tipo === "GASTO" && c.codigo.startsWith("52")).reduce((s, c) => s + c.saldoFinal, 0);
+    const gastosFinancieros = cuentas.filter(c => c.tipo === "GASTO" && c.codigo.startsWith("53")).reduce((s, c) => s + c.saldoFinal, 0);
+    const utilidadOperacional = utilidadBruta - gastosAdmin - gastosVentas;
+    // ── 12 INDICADORES ────────────────────────────────────────────────────────
+    const ind = {
+        razonCorriente: pasivoCorriente > 0 ? activoCorriente / pasivoCorriente : 0,
+        pruebaAcida: pasivoCorriente > 0 ? (activoCorriente - inventariosGrupo) / pasivoCorriente : 0,
+        razonEfectivo: pasivoCorriente > 0 ? efectivoGrupo / pasivoCorriente : 0,
+        endeudamiento: totalActivos > 0 ? totalPasivos / totalActivos : 0,
+        apalancamiento: totalPatrimonio > 0 ? totalPasivos / totalPatrimonio : 0,
+        coberturaIntereses: gastosFinancieros > 0 ? utilidadOperacional / gastosFinancieros : 0,
+        roe: totalPatrimonio > 0 ? (utilidadNeta / totalPatrimonio) * 100 : 0,
+        roa: totalActivos > 0 ? (utilidadNeta / totalActivos) * 100 : 0,
+        margenNetoInd: ingresosNetos > 0 ? (utilidadNeta / ingresosNetos) * 100 : 0,
+        rotInventarios: inventariosGrupo > 0 ? totalCostoVentas / inventariosGrupo : 0,
+        rotCxC: cuentasXCobrar > 0 ? ingresosNetos / cuentasXCobrar : 0,
+        rotActivos: totalActivos > 0 ? ingresosNetos / totalActivos : 0,
+        activoCorriente, activoNoCorriente, pasivoCorriente, pasivoNoCorriente,
+        efectivoGrupo, cuentasXCobrar, inventariosGrupo,
+        gastosAdmin, gastosVentas, gastosFinancieros, utilidadOperacional, ingresosNetos,
+    };
+    // Observaciones automáticas
+    const obs = [];
+    if (margenNeto >= 20)
+        obs.push(`Excelente rentabilidad: margen neto del ${margenNeto.toFixed(1)}%, superior al promedio del sector retail en Colombia (10-15%). La empresa genera valor sólido para el propietario.`);
+    else if (margenNeto >= 10)
+        obs.push(`Rentabilidad aceptable: margen neto del ${margenNeto.toFixed(1)}%, dentro del rango del sector. Se recomienda monitorear costos para seguir mejorando.`);
+    else if (margenNeto >= 0)
+        obs.push(`El margen neto del ${margenNeto.toFixed(1)}% indica presión sobre la rentabilidad. Se recomienda revisar la política de precios y la estructura de costos.`);
+    else
+        obs.push(`La empresa registra una pérdida neta de ${moneyFull(ABS(utilidadNeta))}. Es prioritario identificar las causas y tomar medidas correctivas inmediatas.`);
+    const nomina = cuentas.filter(c => c.tipo === "GASTO" && (c.nombre.toLowerCase().includes("nomin") || c.nombre.toLowerCase().includes("prestador"))).reduce((s, c) => s + c.saldoFinal, 0);
+    if (nomina > 0)
+        obs.push(`La nómina (${moneyFull(nomina)}) representa el ${pct(nomina, totalGastos)}% de los gastos operacionales. ${parseFloat(pct(nomina, totalGastos)) > 60 ? "Nivel elevado — evalúe productividad por colaborador." : "Nivel manejable — monitoree el retorno de la inversión en personal."}`);
+    if (totalCostoVentas > 0) {
+        const pc = parseFloat(pct(totalCostoVentas, ingresosNetos));
+        obs.push(`Costo de ventas: ${pc.toFixed(1)}% sobre ingresos netos. ${pc > 60 ? "Supera el umbral recomendado — revise condiciones con proveedores y rotación de inventario." : "Dentro de rangos saludables. Margen bruto del " + pct(utilidadBruta, ingresosNetos) + "% cubre gastos y genera utilidad."}`);
+    }
+    // Observación de liquidez automática
+    if (ind.razonCorriente > 0) {
+        if (ind.razonCorriente >= 2)
+            obs.push(`Liquidez sólida: razón corriente de ${ind.razonCorriente.toFixed(2)}x. La empresa tiene ${moneyFull(activoCorriente)} en activos corrientes para cubrir ${moneyFull(pasivoCorriente)} de obligaciones a corto plazo.`);
+        else if (ind.razonCorriente >= 1)
+            obs.push(`Liquidez ajustada: razón corriente de ${ind.razonCorriente.toFixed(2)}x. La empresa puede cubrir sus obligaciones CP pero con margen limitado. Monitoree el flujo de caja.`);
+        else
+            obs.push(`Alerta de liquidez: razón corriente de ${ind.razonCorriente.toFixed(2)}x — los activos corrientes no cubren los pasivos de corto plazo. Requiere atención inmediata.`);
+    }
+    return {
+        empresa: empresa || "Empresa", nit: nit || "—", periodo: periodo || "Período analizado",
+        cuentas, ind,
+        resumen: { totalIngresos, totalDevoluciones, totalCostoVentas, totalGastos,
+            totalActivos, totalPasivos, totalPatrimonio,
+            utilidadBruta, utilidadNeta, margenBruto, margenNeto,
+            ingresosNetos, utilidadOperacional, gastosFinancieros },
+        observaciones: obs,
+    };
+}
+// ── COMPONENTES ───────────────────────────────────────────────────────────────
+function Pill({ tipo }) {
+    const cfg = {
+        INGRESO: { c: T.teal, l: "Ingreso" }, DEVOLUCION: { c: T.red, l: "Devolución" },
+        GASTO: { c: T.gold, l: "Gasto" }, COSTO: { c: T.red, l: "Costo" },
+        ACTIVO: { c: T.accent, l: "Activo" }, PASIVO: { c: T.purple, l: "Pasivo" },
+        PATRIMONIO: { c: "#F472B6", l: "Patrimonio" },
+    };
+    const s = cfg[tipo] || { c: T.muted, l: tipo };
+    return React.createElement("span", { style: { background: `${s.c}18`, color: s.c, border: `1px solid ${s.c}40`, fontSize: 9, padding: "2px 8px", borderRadius: 20, fontWeight: 700, letterSpacing: "0.04em" } }, s.l);
+}
+function KPI({ label, value, sub, color, icon, glow }) {
+    return (React.createElement("div", { style: { background: `linear-gradient(145deg,${T.bgCard},${T.bgPanel})`, border: `1px solid ${T.border}`, borderRadius: 14, padding: "20px 18px", position: "relative", overflow: "hidden" } },
+        React.createElement("div", { style: { position: "absolute", top: -20, right: -20, width: 80, height: 80, borderRadius: "50%", background: glow || `${color}15`, filter: "blur(20px)" } }),
+        React.createElement("div", { style: { fontSize: 10, color: T.dimtxt, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 } },
+            React.createElement("span", null, icon),
+            label),
+        React.createElement("div", { style: { fontSize: 22, fontWeight: 800, color, fontFamily: "'DM Mono',monospace", letterSpacing: "-0.5px", lineHeight: 1 } }, value),
+        sub && React.createElement("div", { style: { fontSize: 10, color: T.muted, marginTop: 7, lineHeight: 1.3 } }, sub)));
+}
+function Ring({ val, color, size = 90, label, fmt: fmtFn }) {
+    const p = Math.min(100, Math.max(0, Math.abs(val)));
+    const r = 34, circ = 2 * Math.PI * r, dash = (p / 100) * circ;
+    const display = fmtFn ? fmtFn(val) : val.toFixed(2) + "x";
+    return (React.createElement("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", gap: 6 } },
+        React.createElement("svg", { width: size, height: size, viewBox: "0 0 80 80" },
+            React.createElement("circle", { cx: 40, cy: 40, r: r, fill: "none", stroke: `${color}20`, strokeWidth: 7 }),
+            React.createElement("circle", { cx: 40, cy: 40, r: r, fill: "none", stroke: color, strokeWidth: 7, strokeDasharray: `${dash} ${circ - dash}`, strokeLinecap: "round", transform: "rotate(-90 40 40)" }),
+            React.createElement("text", { x: 40, y: 44, textAnchor: "middle", fill: color, fontSize: 11, fontWeight: 800, fontFamily: "monospace" }, display)),
+        React.createElement("div", { style: { fontSize: 9, color: T.dimtxt, textAlign: "center", lineHeight: 1.3, maxWidth: 90 } }, label)));
+}
+function Bar({ label, value, maxVal, i }) {
+    const w = maxVal > 0 ? Math.max(1, (ABS(value) / maxVal) * 100) : 0;
+    const colors = ["#4F9EFF", "#00E5C3", "#FFB547", "#FF5E7A", "#A78BFA", "#F472B6", "#6EE7B7"];
+    const c = colors[i % colors.length];
+    return (React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: "4px 0" } },
+        React.createElement("div", { style: { width: 180, fontSize: 10, color: T.dimtxt, textAlign: "right", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flexShrink: 0 } }, label),
+        React.createElement("div", { style: { flex: 1, background: "rgba(255,255,255,0.04)", borderRadius: 6, height: 24, position: "relative", overflow: "hidden" } },
+            React.createElement("div", { style: { position: "absolute", left: 0, top: 0, height: "100%", width: `${w}%`, background: `linear-gradient(90deg,${c}aa,${c})`, borderRadius: 6 } }),
+            React.createElement("span", { style: { position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", fontSize: 10, color: T.white, fontFamily: "monospace", fontWeight: 600 } },
+                "$",
+                money(value)))));
+}
+function Donut({ segs }) {
+    const total = segs.reduce((s, x) => s + x.v, 0);
+    let off = 0;
+    const r = 52, cx = 70, cy = 70, circ = 2 * Math.PI * r;
+    return (React.createElement("svg", { width: 140, height: 140, viewBox: "0 0 140 140" },
+        segs.map((seg, i) => {
+            const frac = total > 0 ? seg.v / total : 0;
+            const dash = frac * circ, gap = circ - dash, rot = off * 360 - 90;
+            off += frac;
+            return React.createElement("circle", { key: i, cx: cx, cy: cy, r: r, fill: "none", stroke: seg.c, strokeWidth: 16, strokeDasharray: `${dash} ${gap}`, transform: `rotate(${rot} ${cx} ${cy})` });
+        }),
+        React.createElement("circle", { cx: cx, cy: cy, r: 44, fill: T.bgCard }),
+        React.createElement("text", { x: cx, y: cx - 6, textAnchor: "middle", fill: T.white, fontSize: 10, fontFamily: "monospace" }, "EGRESOS"),
+        React.createElement("text", { x: cx, y: cx + 10, textAnchor: "middle", fill: T.dimtxt, fontSize: 9 }, "distribuci\u00F3n")));
+}
+// ── INDICADOR CARD ─────────────────────────────────────────────────────────────
+function IndCard({ label, formula, value, display, interpretation, semaforo, extra }) {
+    const colors = { verde: T.teal, amarillo: T.gold, rojo: T.red };
+    const color = colors[semaforo] || T.dimtxt;
+    return (React.createElement("div", { style: { background: T.bgCard, border: `1px solid ${T.border}`, borderLeft: `3px solid ${color}`, borderRadius: 12, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8 } },
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start" } },
+            React.createElement("div", null,
+                React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: T.white, marginBottom: 2 } }, label),
+                React.createElement("div", { style: { fontSize: 9, color: T.muted, fontFamily: "monospace" } }, formula)),
+            React.createElement("div", { style: { textAlign: "right" } },
+                React.createElement("div", { style: { fontSize: 22, fontWeight: 900, color, fontFamily: "monospace", lineHeight: 1 } }, display),
+                React.createElement("div", { style: { marginTop: 4 } },
+                    React.createElement("span", { style: { background: `${color}18`, color, border: `1px solid ${color}40`, fontSize: 9, padding: "2px 8px", borderRadius: 20, fontWeight: 700 } }, semaforo === "verde" ? "✓ Óptimo" : semaforo === "amarillo" ? "⚠ Moderado" : "⚠ Revisar")))),
+        React.createElement("div", { style: { fontSize: 11, color: T.dimtxt, lineHeight: 1.6, borderTop: `1px solid ${T.border}`, paddingTop: 8 } }, interpretation),
+        extra && React.createElement("div", { style: { fontSize: 10, color: T.muted, fontFamily: "monospace", background: T.bgPanel, borderRadius: 6, padding: "4px 8px" } }, extra)));
+}
+// ── UPLOAD SCREEN ──────────────────────────────────────────────────────────────
+function UploadScreen({ onResult }) {
+    var _a;
+    const [drag, setDrag] = useState(false);
+    const [file, setFile] = useState("");
+    const [ready, setReady] = useState(false);
+    const [err, setErr] = useState("");
+    const [busy, setBusy] = useState(false);
+    const [data, setData] = useState(null);
+    const [xlsxOk, setXlsxOk] = useState(false);
+    const ref = useRef();
+    useEffect(() => { loadXLSX().then(() => setXlsxOk(true)).catch(() => { }); }, []);
+    const handle = useCallback(async (f) => {
+        if (!f)
+            return;
+        const ext = f.name.split(".").pop().toLowerCase();
+        if (!["xlsx", "xls", "xlsm", "xlsb"].includes(ext)) {
+            setErr("Solo archivos Excel .xlsx / .xls / .xlsm");
+            return;
+        }
+        setErr("");
+        setFile(f.name);
+        setReady(false);
+        setData(null);
+        setBusy(true);
+        try {
+            const r = await processExcel(f);
+            setData(r);
+            setReady(true);
+        }
+        catch (e) {
+            setErr(e.message);
+        }
+        finally {
+            setBusy(false);
+        }
+    }, []);
+    const onDrop = (e) => { e.preventDefault(); setDrag(false); handle(e.dataTransfer.files[0]); };
+    return (React.createElement("div", { style: { minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "48px 24px" } },
+        React.createElement("div", { style: { textAlign: "center", marginBottom: 48 } },
+            React.createElement("div", { style: { display: "inline-flex", alignItems: "center", gap: 16, marginBottom: 16 } },
+                React.createElement("div", { style: { width: 56, height: 56, borderRadius: 16, background: `linear-gradient(135deg,${T.accent},${T.teal})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, boxShadow: `0 0 32px ${T.accentGlow}` } }, "\uD83D\uDCCA"),
+                React.createElement("div", { style: { textAlign: "left" } },
+                    React.createElement("div", { style: { fontSize: 30, fontWeight: 900, color: T.white, letterSpacing: "-1px", lineHeight: 1 } },
+                        "Informes ",
+                        React.createElement("span", { style: { color: T.teal } }, "A&M"),
+                        " Corporativo"),
+                    React.createElement("div", { style: { fontSize: 10, color: T.muted, letterSpacing: "0.2em", textTransform: "uppercase", marginTop: 3 } }, "A&M Soluciones Corporativas SAS"))),
+            React.createElement("p", { style: { color: T.dimtxt, fontSize: 13, maxWidth: 500, lineHeight: 1.7, margin: "0 auto" } },
+                "Carga tu ",
+                React.createElement("strong", { style: { color: T.white } }, "balance de prueba en Excel"),
+                " \u2014 el sistema clasifica autom\u00E1ticamente las cuentas auxiliares seg\u00FAn el PUC colombiano y genera el dashboard con ",
+                React.createElement("strong", { style: { color: T.teal } }, "12 indicadores financieros profesionales"),
+                ".")),
+        React.createElement("div", { onDragOver: (e) => { e.preventDefault(); setDrag(true); }, onDragLeave: () => setDrag(false), onDrop: onDrop, onClick: () => !busy && ref.current.click(), style: { width: "100%", maxWidth: 560, border: `2px dashed ${drag ? T.teal : ready ? T.teal : T.border}`, borderRadius: 20, padding: "48px 24px", textAlign: "center", cursor: busy ? "wait" : "pointer", background: drag ? `${T.teal}08` : ready ? `${T.teal}06` : T.bgCard, transition: "all 0.25s", marginBottom: 14, boxShadow: ready ? `0 0 40px ${T.tealGlow}` : "none" } },
+            React.createElement("input", { ref: ref, type: "file", accept: ".xlsx,.xls,.xlsm,.xlsb", style: { display: "none" }, onChange: (e) => handle(e.target.files[0]) }),
+            busy ? (React.createElement(React.Fragment, null,
+                React.createElement("div", { style: { fontSize: 44, marginBottom: 12 } }, "\u2699\uFE0F"),
+                React.createElement("div", { style: { color: T.teal, fontWeight: 700, fontSize: 15 } }, "Procesando balance..."),
+                React.createElement("div", { style: { color: T.muted, fontSize: 12, marginTop: 6 } }, "Identificando cuentas y calculando indicadores financieros"))) : ready ? (React.createElement(React.Fragment, null,
+                React.createElement("div", { style: { fontSize: 44, marginBottom: 12 } }, "\u2705"),
+                React.createElement("div", { style: { color: T.teal, fontWeight: 700, fontSize: 15, marginBottom: 4 } }, file),
+                React.createElement("div", { style: { color: T.dimtxt, fontSize: 13, marginBottom: 14 } },
+                    React.createElement("strong", { style: { color: T.white } }, (_a = data === null || data === void 0 ? void 0 : data.cuentas) === null || _a === void 0 ? void 0 : _a.length),
+                    " cuentas auxiliares \u00B7 ",
+                    React.createElement("strong", { style: { color: T.white } }, data === null || data === void 0 ? void 0 : data.empresa)),
+                React.createElement("div", { style: { display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" } }, ["INGRESO", "DEVOLUCION", "GASTO", "COSTO", "ACTIVO", "PASIVO"].map(t => {
+                    var _a;
+                    const n = ((_a = data === null || data === void 0 ? void 0 : data.cuentas) === null || _a === void 0 ? void 0 : _a.filter(c => c.tipo === t).length) || 0;
+                    if (!n)
+                        return null;
+                    const cols = { INGRESO: T.teal, DEVOLUCION: T.red, GASTO: T.gold, COSTO: T.red, ACTIVO: T.accent, PASIVO: T.purple };
+                    return React.createElement("span", { key: t, style: { background: `${cols[t]}18`, color: cols[t], border: `1px solid ${cols[t]}40`, fontSize: 10, padding: "3px 10px", borderRadius: 20, fontWeight: 600 } },
+                        t,
+                        " (",
+                        n,
+                        ")");
+                })))) : (React.createElement(React.Fragment, null,
+                React.createElement("div", { style: { fontSize: 52, marginBottom: 14 } }, "\uD83D\uDCC2"),
+                React.createElement("div", { style: { color: T.white, fontWeight: 700, fontSize: 17, marginBottom: 8 } }, "Arrastra tu Excel aqu\u00ED"),
+                React.createElement("div", { style: { display: "flex", gap: 8, justifyContent: "center", marginBottom: 14 } }, [".xlsx", ".xls", ".xlsm"].map(e => (React.createElement("span", { key: e, style: { background: `${T.accent}15`, color: T.accent, border: `1px solid ${T.accent}30`, fontSize: 11, padding: "3px 12px", borderRadius: 20, fontWeight: 600 } }, e)))),
+                React.createElement("div", { style: { background: "rgba(255,255,255,0.04)", border: `1px solid ${T.border}`, borderRadius: 10, padding: "8px 22px", fontSize: 12, color: T.muted, display: "inline-block" } }, "o haz clic para seleccionar"),
+                !xlsxOk && React.createElement("div", { style: { marginTop: 10, fontSize: 11, color: T.muted } }, "\u23F3 Cargando lector de Excel...")))),
+        ready && data && (React.createElement("div", { style: { width: "100%", maxWidth: 560, marginBottom: 14, background: T.bgPanel, border: `1px solid ${T.border}`, borderRadius: 14, padding: "14px 18px" } },
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 } },
+                React.createElement("div", { style: { fontSize: 12, color: T.teal, fontWeight: 700 } }, "Vista previa"),
+                React.createElement("button", { onClick: () => { setReady(false); setFile(""); setData(null); }, style: { background: "transparent", border: `1px solid ${T.border}`, color: T.muted, borderRadius: 8, padding: "3px 10px", cursor: "pointer", fontSize: 11 } }, "Cambiar archivo")),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8 } }, [["Ingresos", data.resumen.totalIngresos, T.teal], ["Costos", data.resumen.totalCostoVentas, T.red], ["Gastos", data.resumen.totalGastos, T.gold], ["Utilidad", data.resumen.utilidadNeta, data.resumen.utilidadNeta >= 0 ? T.accent : T.red]].map(([l, v, c], i) => (React.createElement("div", { key: i, style: { background: T.bgCard, borderRadius: 10, padding: "10px 8px", textAlign: "center", border: `1px solid ${T.border}` } },
+                React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: c, fontFamily: "monospace" } },
+                    "$",
+                    money(v)),
+                React.createElement("div", { style: { fontSize: 9, color: T.muted, marginTop: 3, textTransform: "uppercase", letterSpacing: "0.06em" } }, l))))))),
+        err && React.createElement("div", { style: { width: "100%", maxWidth: 560, marginBottom: 14, color: T.red, fontSize: 11, background: `${T.red}12`, border: `1px solid ${T.red}30`, padding: "12px 16px", borderRadius: 12, lineHeight: 1.7, wordBreak: "break-word" } },
+            " \u26A0\uFE0F ",
+            err),
+        React.createElement("button", { onClick: () => data && onResult(data), disabled: !ready || !data, style: { width: "100%", maxWidth: 560, background: ready ? `linear-gradient(135deg,${T.accent},${T.teal})` : "#1a2540", color: ready ? T.bg : T.muted, border: "none", borderRadius: 14, padding: "16px 32px", fontSize: 15, fontWeight: 800, cursor: ready ? "pointer" : "not-allowed", transition: "all 0.2s", boxShadow: ready ? `0 8px 32px ${T.accentGlow}` : "none" } }, ready ? "🚀 Generar dashboard con indicadores financieros" : "Carga un archivo Excel para continuar")));
+}
+// ── DASHBOARD ──────────────────────────────────────────────────────────────────
+function Dashboard({ data, onReset }) {
+    const [tab, setTab] = useState("resumen");
+    const [logo, setLogo] = useState(null);
+    const [search, setSearch] = useState("");
+    const logoRef = useRef();
+    // ── GENERADOR PDF ───────────────────────────────────────────────────────────
+    const [generatingPDF, setGeneratingPDF] = useState(false);
+    const loadLib = (src) => new Promise((res, rej) => {
+        if (document.querySelector(`script[src="${src}"]`)) {
+            res();
+            return;
+        }
+        const s = document.createElement("script");
+        s.src = src;
+        s.onload = res;
+        s.onerror = rej;
+        document.head.appendChild(s);
+    });
+    const generatePDF = async () => {
+        setGeneratingPDF(true);
+        try {
+            await loadLib("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js");
+            await loadLib("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
+            const { jsPDF } = window.jspdf;
+            const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+            const pw = 210, ph = 297;
+            const margin = 10;
+            // Render cada sección como canvas
+            const sections = [
+                { id: "pdf-portada", label: "Portada" },
+                { id: "pdf-resultados", label: "Estado de Resultados" },
+                { id: "pdf-indicadores", label: "Indicadores Financieros" },
+                { id: "pdf-gastos", label: "Análisis de Gastos" },
+                { id: "pdf-obs", label: "Análisis del Contador" },
+            ];
+            // Mostrar secciones temporalmente para capturar
+            const pdfContainer = document.getElementById("pdf-container");
+            pdfContainer.style.display = "block";
+            await new Promise(r => setTimeout(r, 300));
+            let firstPage = true;
+            for (const sec of sections) {
+                const el = document.getElementById(sec.id);
+                if (!el)
+                    continue;
+                const canvas = await html2canvas(el, {
+                    scale: 2,
+                    backgroundColor: "#070D1A",
+                    useCORS: true,
+                    logging: false,
+                });
+                const imgData = canvas.toDataURL("image/jpeg", 0.92);
+                const imgW = pw - margin * 2;
+                const imgH = (canvas.height * imgW) / canvas.width;
+                let yPos = 0;
+                while (yPos < imgH) {
+                    if (!firstPage)
+                        pdf.addPage();
+                    firstPage = false;
+                    const pageH = ph - margin * 2;
+                    const sliceH = Math.min(pageH, imgH - yPos);
+                    const srcY = (yPos / imgH) * canvas.height;
+                    const srcH = (sliceH / imgH) * canvas.height;
+                    // Crear canvas del slice
+                    const sliceCanvas = document.createElement("canvas");
+                    sliceCanvas.width = canvas.width;
+                    sliceCanvas.height = srcH;
+                    const ctx = sliceCanvas.getContext("2d");
+                    ctx.drawImage(canvas, 0, srcY, canvas.width, srcH, 0, 0, canvas.width, srcH);
+                    const sliceData = sliceCanvas.toDataURL("image/jpeg", 0.92);
+                    pdf.addImage(sliceData, "JPEG", margin, margin, imgW, sliceH);
+                    yPos += pageH;
+                }
+            }
+            pdfContainer.style.display = "none";
+            pdf.save(`Informe_Financiero_${data.empresa.replace(/\s+/g, "_")}_${data.periodo.replace(/[^\w]/g, "_")}.pdf`);
+        }
+        catch (e) {
+            alert("Error generando PDF: " + e.message);
+        }
+        finally {
+            setGeneratingPDF(false);
+        }
+    };
+    const r = data.resumen;
+    const ind = data.ind;
+    const gastos = data.cuentas.filter(c => c.tipo === "GASTO");
+    const ingresos = data.cuentas.filter(c => c.tipo === "INGRESO");
+    const devoluciones = data.cuentas.filter(c => c.tipo === "DEVOLUCION");
+    const costos = data.cuentas.filter(c => c.tipo === "COSTO");
+    const activos = data.cuentas.filter(c => c.tipo === "ACTIVO");
+    const pasivos = data.cuentas.filter(c => c.tipo === "PASIVO");
+    const patrimonio = data.cuentas.filter(c => c.tipo === "PATRIMONIO");
+    const all = [...ingresos, ...devoluciones, ...costos, ...gastos, ...activos, ...pasivos, ...patrimonio];
+    const filtered = search ? all.filter(c => c.nombre.toLowerCase().includes(search.toLowerCase()) || c.codigo.includes(search)) : all;
+    const gastosSort = [...gastos].sort((a, b) => b.saldoFinal - a.saldoFinal);
+    const maxG = Math.max(...gastosSort.map(g => g.saldoFinal), 1);
+    const utilColor = r.utilidadNeta >= 0 ? T.teal : T.red;
+    const donut = [{ v: r.totalCostoVentas, c: T.red, l: "Costo ventas" }, { v: r.totalGastos, c: T.gold, l: "Gastos" }, { v: Math.max(0, r.utilidadNeta), c: T.teal, l: "Utilidad" }].filter(s => s.v > 0);
+    const handleLogo = (e) => {
+        const f = e.target.files[0];
+        if (!f)
+            return;
+        const reader = new FileReader();
+        reader.onload = (ev) => setLogo(ev.target.result);
+        reader.readAsDataURL(f);
+    };
+    const tabs = [
+        { id: "resumen", label: "📊 Resumen" },
+        { id: "indicadores", label: "📐 Indicadores" },
+        { id: "resultados", label: "📑 Estado de resultados" },
+        { id: "cuentas", label: "📋 Cuentas" },
+        { id: "gastos", label: "💸 Gastos" },
+        { id: "obs", label: "💡 Análisis" },
+    ];
+    // Función semáforo para indicadores
+    const semRC = (v) => v >= 2 ? "verde" : v >= 1 ? "amarillo" : "rojo";
+    const semPA = (v) => v >= 1 ? "verde" : v >= 0.5 ? "amarillo" : "rojo";
+    const semEf = (v) => v >= 0.5 ? "verde" : v >= 0.2 ? "amarillo" : "rojo";
+    const semEnd = (v) => v <= 0.4 ? "verde" : v <= 0.6 ? "amarillo" : "rojo";
+    const semApal = (v) => v <= 0.5 ? "verde" : v <= 1 ? "amarillo" : "rojo";
+    const semCob = (v) => v >= 2 ? "verde" : v >= 1 ? "amarillo" : "rojo";
+    const semROE = (v) => v >= 15 ? "verde" : v >= 8 ? "amarillo" : "rojo";
+    const semROA = (v) => v >= 10 ? "verde" : v >= 5 ? "amarillo" : "rojo";
+    const semMN = (v) => v >= 15 ? "verde" : v >= 8 ? "amarillo" : "rojo";
+    const semRI = (v) => v >= 4 ? "verde" : v >= 2 ? "amarillo" : "rojo";
+    const semCxC = (v) => v >= 6 ? "verde" : v >= 3 ? "amarillo" : "rojo";
+    const semRA = (v) => v >= 1.5 ? "verde" : v >= 0.8 ? "amarillo" : "rojo";
+    const diasInv = ind.rotInventarios > 0 ? Math.round(365 / ind.rotInventarios) : 0;
+    const diasCxC = ind.rotCxC > 0 ? Math.round(365 / ind.rotCxC) : 0;
+    return (React.createElement("div", { style: { minHeight: "100vh", background: T.bg, color: T.white } },
+        React.createElement("div", { style: { background: `${T.bgCard}ee`, backdropFilter: "blur(12px)", borderBottom: `1px solid ${T.border}`, padding: "0 32px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 200, height: 60 } },
+            React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 16 } },
+                React.createElement("div", { style: { position: "relative", cursor: "pointer" }, onClick: () => logoRef.current.click() },
+                    React.createElement("input", { ref: logoRef, type: "file", accept: "image/*", style: { display: "none" }, onChange: handleLogo }),
+                    logo ? (React.createElement("img", { src: logo, alt: "Logo", style: { height: 36, maxWidth: 120, objectFit: "contain", borderRadius: 6 } })) : (React.createElement("div", { style: { height: 36, paddingInline: 12, border: `1px dashed ${T.border}`, borderRadius: 8, display: "flex", alignItems: "center", gap: 6, color: T.muted, fontSize: 11, background: T.bgPanel } },
+                        "\uD83D\uDDBC\uFE0F ",
+                        React.createElement("span", null, "Subir logo")))),
+                React.createElement("div", { style: { width: 1, height: 28, background: T.border } }),
+                React.createElement("div", null,
+                    React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: T.white, lineHeight: 1 } }, data.empresa),
+                    React.createElement("div", { style: { fontSize: 10, color: T.muted, marginTop: 2 } },
+                        "NIT ",
+                        data.nit,
+                        " \u00A0\u00B7\u00A0 ",
+                        data.periodo))),
+            React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
+                React.createElement("div", { style: { fontSize: 10, color: T.muted } },
+                    data.cuentas.length,
+                    " cuentas auxiliares"),
+                React.createElement("button", { onClick: generatePDF, disabled: generatingPDF, style: {
+                        background: generatingPDF ? T.bgPanel : `linear-gradient(135deg,${T.teal},${T.accent})`,
+                        border: "none", color: generatingPDF ? T.muted : T.bg,
+                        borderRadius: 8, padding: "7px 16px", cursor: generatingPDF ? "wait" : "pointer",
+                        fontSize: 11, fontWeight: 800, display: "flex", alignItems: "center", gap: 6,
+                        boxShadow: generatingPDF ? "none" : `0 4px 16px ${T.tealGlow}`,
+                        transition: "all 0.2s",
+                    } }, generatingPDF ? "⏳ Generando PDF..." : "⬇️ Descargar PDF"),
+                React.createElement("button", { onClick: onReset, style: { background: T.bgPanel, border: `1px solid ${T.border}`, color: T.dimtxt, borderRadius: 8, padding: "6px 14px", cursor: "pointer", fontSize: 11, fontWeight: 600 } }, "\u2190 Nuevo an\u00E1lisis"))),
+        React.createElement("div", { style: { background: T.bgCard, borderBottom: `1px solid ${T.border}`, padding: "0 32px", display: "flex", gap: 0, overflowX: "auto" } }, tabs.map(t => (React.createElement("button", { key: t.id, onClick: () => setTab(t.id), style: { background: "transparent", border: "none", borderBottom: tab === t.id ? `2px solid ${T.teal}` : "2px solid transparent", color: tab === t.id ? T.teal : T.muted, padding: "14px 18px", cursor: "pointer", fontSize: 12, fontWeight: tab === t.id ? 700 : 400, whiteSpace: "nowrap", transition: "color 0.2s" } }, t.label)))),
+        React.createElement("div", { style: { maxWidth: 1200, margin: "0 auto", padding: "28px 32px" } },
+            React.createElement("div", { style: {
+                    background: `linear-gradient(135deg,${T.bgPanel},${T.bgCard})`,
+                    border: `1px solid ${T.borderHi}`,
+                    borderLeft: `4px solid ${T.teal}`,
+                    borderRadius: 14, padding: "18px 24px", marginBottom: 24,
+                    display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12,
+                } },
+                React.createElement("div", null,
+                    React.createElement("div", { style: { fontSize: 9, color: T.teal, textTransform: "uppercase", letterSpacing: "0.15em", fontWeight: 700, marginBottom: 6 } }, "Empresa analizada"),
+                    React.createElement("div", { style: { fontSize: 22, fontWeight: 900, color: T.white, letterSpacing: "-0.5px", lineHeight: 1.1 } }, data.empresa),
+                    React.createElement("div", { style: { display: "flex", gap: 16, marginTop: 8, flexWrap: "wrap" } },
+                        React.createElement("span", { style: { fontSize: 12, color: T.dimtxt } },
+                            React.createElement("span", { style: { color: T.muted } }, "NIT"),
+                            "\u00A0",
+                            React.createElement("span", { style: { color: T.white, fontWeight: 600, fontFamily: "monospace" } }, data.nit)),
+                        React.createElement("span", { style: { fontSize: 12, color: T.dimtxt } },
+                            React.createElement("span", { style: { color: T.muted } }, "Per\u00EDodo"),
+                            "\u00A0",
+                            React.createElement("span", { style: { color: T.accent, fontWeight: 600 } }, data.periodo)),
+                        React.createElement("span", { style: { fontSize: 12, color: T.dimtxt } },
+                            React.createElement("span", { style: { color: T.muted } }, "Cuentas auxiliares"),
+                            "\u00A0",
+                            React.createElement("span", { style: { color: T.white, fontWeight: 600 } }, data.cuentas.length)))),
+                logo && (React.createElement("img", { src: logo, alt: "Logo empresa", style: {
+                        height: 52, maxWidth: 160, objectFit: "contain",
+                        borderRadius: 8, padding: 4,
+                        background: "rgba(255,255,255,0.04)", border: `1px solid ${T.border}`,
+                    } }))),
+            "}",
+            tab === "resumen" && (React.createElement("div", null,
+                React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 20 } },
+                    React.createElement(KPI, { label: "Ingresos totales", value: `$${money(r.totalIngresos)}`, sub: `${ingresos.length} cuentas de ingreso`, color: T.teal, icon: "\uD83D\uDCE5", glow: T.tealGlow }),
+                    React.createElement(KPI, { label: "Costo de ventas", value: `$${money(r.totalCostoVentas)}`, sub: `${pct(r.totalCostoVentas, r.ingresosNetos)}% sobre ingresos netos`, color: T.red, icon: "\uD83C\uDFF7\uFE0F" }),
+                    React.createElement(KPI, { label: "Gastos operac.", value: `$${money(r.totalGastos)}`, sub: `${pct(r.totalGastos, r.utilidadBruta)}% sobre utilidad bruta`, color: T.gold, icon: "\uD83D\uDCB8" }),
+                    React.createElement(KPI, { label: "Utilidad neta", value: `$${money(r.utilidadNeta)}`, sub: `Margen: ${pct(r.utilidadNeta, r.ingresosNetos)}%`, color: utilColor, icon: "\uD83D\uDCB0", glow: r.utilidadNeta >= 0 ? T.tealGlow : "rgba(255,94,122,0.2)" })),
+                React.createElement("div", { style: { display: "grid", gridTemplateColumns: "220px 1fr 1fr", gap: 14, marginBottom: 20 } },
+                    React.createElement("div", { style: { background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 16, padding: 20, display: "flex", flexDirection: "column", alignItems: "center", gap: 14 } },
+                        React.createElement("div", { style: { fontSize: 10, color: T.muted, textTransform: "uppercase", letterSpacing: "0.1em", alignSelf: "flex-start" } }, "Distribuci\u00F3n"),
+                        React.createElement(Donut, { segs: donut }),
+                        React.createElement("div", { style: { width: "100%" } }, donut.map((s, i) => (React.createElement("div", { key: i, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", borderBottom: `1px solid ${T.border}` } },
+                            React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+                                React.createElement("div", { style: { width: 6, height: 6, borderRadius: 2, background: s.c } }),
+                                React.createElement("span", { style: { fontSize: 10, color: T.dimtxt } }, s.l)),
+                            React.createElement("span", { style: { fontSize: 10, fontWeight: 700, color: s.c } },
+                                pct(s.v, r.totalIngresos),
+                                "%")))))),
+                    React.createElement("div", { style: { background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 16, padding: 20 } },
+                        React.createElement("div", { style: { fontSize: 10, color: T.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 16 } }, "Indicadores clave (resumen)"),
+                        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } },
+                            React.createElement(Ring, { val: ind.razonCorriente, color: T.teal, label: "Raz\u00F3n corriente", fmt: (v) => v.toFixed(2) + "x" }),
+                            React.createElement(Ring, { val: Math.min(100, ind.endeudamiento * 100), color: T.red, label: `Endeudamiento ${(ind.endeudamiento * 100).toFixed(1)}%`, fmt: (v) => v.toFixed(1) + "%" }),
+                            React.createElement(Ring, { val: Math.min(100, ABS(ind.roe)), color: T.gold, label: `ROE ${ind.roe.toFixed(1)}%`, fmt: (v) => v.toFixed(1) + "%" }),
+                            React.createElement(Ring, { val: Math.min(100, ABS(ind.rotInventarios) * 20), color: T.accent, label: `Inv. ${ind.rotInventarios.toFixed(2)}x`, fmt: (v) => (v / 20).toFixed(2) + "x" }))),
+                    React.createElement("div", { style: { background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 16, padding: 20 } },
+                        React.createElement("div", { style: { fontSize: 10, color: T.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 16 } }, "Balance patrimonial"),
+                        [
+                            { label: "Activo corriente", val: ind.activoCorriente, color: T.teal },
+                            { label: "Activo no corriente", val: ind.activoNoCorriente, color: T.accent },
+                            { label: "Pasivo corriente", val: ind.pasivoCorriente, color: T.red },
+                            { label: "Pasivo no corriente", val: ind.pasivoNoCorriente, color: T.purple },
+                            { label: "Patrimonio", val: r.totalPatrimonio, color: "#F472B6" },
+                        ].map((row, i) => (React.createElement("div", { key: i, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: i < 4 ? `1px solid ${T.border}` : "none" } },
+                            React.createElement("span", { style: { fontSize: 11, color: T.dimtxt } }, row.label),
+                            React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: row.color, fontFamily: "monospace" } },
+                                "$",
+                                money(row.val))))))))),
+            tab === "indicadores" && (React.createElement("div", null,
+                React.createElement("div", { style: { marginBottom: 24 } },
+                    React.createElement("div", { style: { fontSize: 16, fontWeight: 800, color: T.white, marginBottom: 4 } }, "Indicadores financieros profesionales"),
+                    React.createElement("div", { style: { fontSize: 12, color: T.muted } },
+                        "Calculados con base en grupos del PUC colombiano \u00B7 ",
+                        data.periodo,
+                        " \u00B7 Metodolog\u00EDa NIIF para Pymes")),
+                React.createElement("div", { style: { background: T.bgPanel, border: `1px solid ${T.border}`, borderRadius: 12, padding: "14px 18px", marginBottom: 24, display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 } }, [
+                    { l: "Activo corriente", v: ind.activoCorriente, c: T.teal },
+                    { l: "Pasivo corriente", v: ind.pasivoCorriente, c: T.red },
+                    { l: "Inventarios (Gr.14)", v: ind.inventariosGrupo, c: T.gold },
+                    { l: "Efectivo (Gr.11-12)", v: ind.efectivoGrupo, c: T.accent },
+                    { l: "Cuentas x cobrar (Gr.13)", v: ind.cuentasXCobrar, c: T.purple },
+                    { l: "Utilidad operacional", v: ind.utilidadOperacional, c: T.teal },
+                    { l: "Gastos financieros (Gr.53)", v: ind.gastosFinancieros, c: T.red },
+                    { l: "Ingresos netos", v: ind.ingresosNetos, c: T.white },
+                ].map((b, i) => (React.createElement("div", { key: i, style: { textAlign: "center" } },
+                    React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: b.c, fontFamily: "monospace" } },
+                        "$",
+                        money(b.v)),
+                    React.createElement("div", { style: { fontSize: 9, color: T.muted, marginTop: 2 } }, b.l))))),
+                React.createElement("div", { style: { marginBottom: 20 } },
+                    React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 12 } },
+                        React.createElement("div", { style: { width: 28, height: 28, borderRadius: 8, background: `${T.teal}20`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 } }, "\uD83D\uDCA7"),
+                        React.createElement("div", null,
+                            React.createElement("div", { style: { fontSize: 14, fontWeight: 800, color: T.white } }, "Indicadores de Liquidez"),
+                            React.createElement("div", { style: { fontSize: 10, color: T.muted } }, "Capacidad para cumplir obligaciones a corto plazo"))),
+                    React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 } },
+                        React.createElement(IndCard, { label: "Raz\u00F3n Corriente", formula: `AC / PC = ${money(ind.activoCorriente)} / ${money(ind.pasivoCorriente)}`, value: ind.razonCorriente, display: `${ind.razonCorriente.toFixed(2)}x`, semaforo: semRC(ind.razonCorriente), interpretation: `Por cada $1 de deuda a corto plazo, la empresa tiene $${ind.razonCorriente.toFixed(2)} de activos corrientes. ${ind.razonCorriente >= 2 ? "Excelente cobertura — la empresa tiene amplia capacidad de pago." : ind.razonCorriente >= 1 ? "Cobertura básica — monitoree el flujo de caja." : "Riesgo de liquidez — los activos corrientes no cubren las obligaciones CP."}`, extra: `Referencia óptima: ≥ 2.0x · Mínimo aceptable: 1.0x` }),
+                        React.createElement(IndCard, { label: "Prueba \u00C1cida", formula: `(AC - Inventarios) / PC`, value: ind.pruebaAcida, display: `${ind.pruebaAcida.toFixed(2)}x`, semaforo: semPA(ind.pruebaAcida), interpretation: `Sin contar inventarios (que no siempre son líquidos), la empresa tiene $${ind.pruebaAcida.toFixed(2)} por cada $1 de deuda CP. ${ind.pruebaAcida >= 1 ? "Posición sólida — puede cumplir obligaciones sin liquidar inventario." : "Depende del inventario para cubrir sus deudas corrientes — evalúe la rotación."}`, extra: `Referencia óptima: ≥ 1.0x` }),
+                        React.createElement(IndCard, { label: "Raz\u00F3n de Efectivo", formula: `Efectivo (G11+12) / PC`, value: ind.razonEfectivo, display: `${ind.razonEfectivo.toFixed(2)}x`, semaforo: semEf(ind.razonEfectivo), interpretation: `Con el efectivo disponible (${moneyFull(ind.efectivoGrupo)}), la empresa puede cubrir el ${(ind.razonEfectivo * 100).toFixed(1)}% de sus pasivos corrientes de forma inmediata. ${ind.razonEfectivo >= 0.5 ? "Buena disponibilidad de caja." : "Caja ajustada — asegure líneas de crédito disponibles."}`, extra: `Referencia: ≥ 0.5x · Pasivo corriente: ${moneyFull(ind.pasivoCorriente)}` }))),
+                React.createElement("div", { style: { marginBottom: 20 } },
+                    React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 12 } },
+                        React.createElement("div", { style: { width: 28, height: 28, borderRadius: 8, background: `${T.purple}20`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 } }, "\uD83C\uDFDB\uFE0F"),
+                        React.createElement("div", null,
+                            React.createElement("div", { style: { fontSize: 14, fontWeight: 800, color: T.white } }, "Indicadores de Solvencia"),
+                            React.createElement("div", { style: { fontSize: 10, color: T.muted } }, "Estructura de financiamiento y capacidad de pago a largo plazo"))),
+                    React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 } },
+                        React.createElement(IndCard, { label: "Endeudamiento Total", formula: `Pasivo Total / Activo Total`, value: ind.endeudamiento, display: `${(ind.endeudamiento * 100).toFixed(1)}%`, semaforo: semEnd(ind.endeudamiento), interpretation: `El ${(ind.endeudamiento * 100).toFixed(1)}% de los activos está financiado con deuda. ${ind.endeudamiento <= 0.4 ? "Estructura financiera sana — bajo riesgo para acreedores." : ind.endeudamiento <= 0.6 ? "Endeudamiento moderado — manejable pero en zona de atención." : "Endeudamiento alto — evalúe estrategias de capitalización."}`, extra: `Óptimo: ≤ 40% · Activo total: ${moneyFull(r.totalActivos)} · Pasivo: ${moneyFull(r.totalPasivos)}` }),
+                        React.createElement(IndCard, { label: "Apalancamiento Financiero", formula: `Pasivo Total / Patrimonio`, value: ind.apalancamiento, display: `${ind.apalancamiento.toFixed(2)}x`, semaforo: semApal(ind.apalancamiento), interpretation: `Por cada $1 de patrimonio propio hay $${ind.apalancamiento.toFixed(2)} de deuda con terceros. ${ind.apalancamiento <= 0.5 ? "Bajo apalancamiento — la empresa se financia principalmente con recursos propios." : ind.apalancamiento <= 1 ? "Apalancamiento moderado — equilibrio entre deuda y patrimonio." : "Apalancamiento elevado — dependencia de terceros para financiar operaciones."}`, extra: `Referencia: ≤ 0.5x óptimo · Patrimonio: ${moneyFull(r.totalPatrimonio)}` }),
+                        React.createElement(IndCard, { label: "Cobertura de Intereses", formula: `Utilidad Operacional / Gastos Financieros`, value: ind.coberturaIntereses, display: `${ind.coberturaIntereses.toFixed(2)}x`, semaforo: semCob(ind.coberturaIntereses), interpretation: `La utilidad operacional cubre ${ind.coberturaIntereses.toFixed(2)} veces los gastos financieros. ${ind.coberturaIntereses >= 2 ? "Capacidad holgada de servicio de deuda." : ind.coberturaIntereses >= 1 ? "Cubre los intereses pero con margen limitado — reduzca deuda financiera." : "La operación no genera suficiente para cubrir los intereses — situación crítica."}`, extra: `UO: ${moneyFull(ind.utilidadOperacional)} · GF: ${moneyFull(ind.gastosFinancieros)}` }))),
+                React.createElement("div", { style: { marginBottom: 20 } },
+                    React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 12 } },
+                        React.createElement("div", { style: { width: 28, height: 28, borderRadius: 8, background: `${T.gold}20`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 } }, "\uD83D\uDCC8"),
+                        React.createElement("div", null,
+                            React.createElement("div", { style: { fontSize: 14, fontWeight: 800, color: T.white } }, "Indicadores de Rentabilidad"),
+                            React.createElement("div", { style: { fontSize: 10, color: T.muted } }, "Retorno generado sobre inversi\u00F3n y ventas"))),
+                    React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 } },
+                        React.createElement(IndCard, { label: "ROE \u2014 Retorno sobre Patrimonio", formula: `Utilidad Neta / Patrimonio × 100`, value: ind.roe, display: `${ind.roe.toFixed(2)}%`, semaforo: semROE(ind.roe), interpretation: `Los propietarios obtienen un ${ind.roe.toFixed(1)}% de retorno sobre su inversión en la empresa. ${ind.roe >= 15 ? "Excelente retorno para los accionistas — supera el costo de oportunidad típico." : ind.roe >= 8 ? "Retorno aceptable — comparable con inversiones de riesgo moderado." : "Retorno bajo — evalúe si el capital estaría mejor invertido en otra alternativa."}`, extra: `UN: ${moneyFull(r.utilidadNeta)} · Patrimonio: ${moneyFull(r.totalPatrimonio)}` }),
+                        React.createElement(IndCard, { label: "ROA \u2014 Retorno sobre Activos", formula: `Utilidad Neta / Activo Total × 100`, value: ind.roa, display: `${ind.roa.toFixed(2)}%`, semaforo: semROA(ind.roa), interpretation: `Por cada $100 invertidos en activos, la empresa genera $${ind.roa.toFixed(1)} de utilidad neta. ${ind.roa >= 10 ? "Activos altamente productivos." : ind.roa >= 5 ? "Productividad moderada de activos — hay espacio de mejora." : "Activos subaprovechados — evalúe la eficiencia operativa o venta de activos improductivos."}`, extra: `UN: ${moneyFull(r.utilidadNeta)} · AT: ${moneyFull(r.totalActivos)}` }),
+                        React.createElement(IndCard, { label: "Margen Neto", formula: `Utilidad Neta / Ingresos Netos × 100`, value: ind.margenNetoInd, display: `${ind.margenNetoInd.toFixed(2)}%`, semaforo: semMN(ind.margenNetoInd), interpretation: `De cada $100 de ingresos netos, $${ind.margenNetoInd.toFixed(1)} se convierten en utilidad. ${ind.margenNetoInd >= 15 ? "Margen excelente para el sector comercial colombiano." : ind.margenNetoInd >= 8 ? "Margen dentro del promedio del sector — continúe optimizando costos." : "Margen bajo — revise estructura de precios y reduzca costos operativos."}`, extra: `Ingr. netos: ${moneyFull(ind.ingresosNetos)} · Margen bruto: ${pct(r.utilidadBruta, ind.ingresosNetos)}%` }))),
+                React.createElement("div", { style: { marginBottom: 20 } },
+                    React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 12 } },
+                        React.createElement("div", { style: { width: 28, height: 28, borderRadius: 8, background: `${T.accent}20`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 } }, "\u2699\uFE0F"),
+                        React.createElement("div", null,
+                            React.createElement("div", { style: { fontSize: 14, fontWeight: 800, color: T.white } }, "Indicadores de Gesti\u00F3n"),
+                            React.createElement("div", { style: { fontSize: 10, color: T.muted } }, "Eficiencia en el uso de recursos y activos"))),
+                    React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 } },
+                        React.createElement(IndCard, { label: "Rotaci\u00F3n de Inventarios", formula: `Costo Ventas / Inventarios (Gr.14)`, value: ind.rotInventarios, display: `${ind.rotInventarios.toFixed(2)}x`, semaforo: semRI(ind.rotInventarios), interpretation: `El inventario rota ${ind.rotInventarios.toFixed(2)} veces al período, lo que equivale a ${diasInv} días promedio en bodega. ${diasInv <= 60 ? "Excelente rotación — inventario ágil y eficiente." : diasInv <= 120 ? "Rotación moderada — evalúe si hay productos de baja salida." : "Rotación lenta — riesgo de obsolescencia y capital inmovilizado. Revise política de compras."}`, extra: `${diasInv} días promedio en inventario · CV: ${moneyFull(r.totalCostoVentas)} · Inv: ${moneyFull(ind.inventariosGrupo)}` }),
+                        React.createElement(IndCard, { label: "Rotaci\u00F3n Cuentas x Cobrar", formula: `Ingresos Netos / CxC (Gr.13)`, value: ind.rotCxC, display: `${ind.rotCxC.toFixed(2)}x`, semaforo: semCxC(ind.rotCxC), interpretation: `La cartera se recupera ${ind.rotCxC.toFixed(2)} veces al período — equivale a ${diasCxC} días promedio de cobro. ${diasCxC <= 30 ? "Cobro ágil — política de cartera muy eficiente." : diasCxC <= 60 ? "Período de cobro razonable para el sector comercial." : "Cartera lenta — implemente políticas de cobro más estrictas para mejorar el flujo de caja."}`, extra: `${diasCxC} días promedio de cobro · CxC: ${moneyFull(ind.cuentasXCobrar)}` }),
+                        React.createElement(IndCard, { label: "Rotaci\u00F3n de Activos Totales", formula: `Ingresos Netos / Activo Total`, value: ind.rotActivos, display: `${ind.rotActivos.toFixed(2)}x`, semaforo: semRA(ind.rotActivos), interpretation: `Por cada $1 invertido en activos, la empresa genera $${ind.rotActivos.toFixed(2)} de ingreso. ${ind.rotActivos >= 1.5 ? "Alta eficiencia en el uso de activos — excelente capacidad de generación de ingresos." : ind.rotActivos >= 0.8 ? "Uso moderado de activos — hay oportunidad de aumentar ingresos sin incrementar activos." : "Baja generación de ingresos por activo — evalúe la capacidad instalada y estrategias de ventas."}`, extra: `Ingresos netos: ${moneyFull(ind.ingresosNetos)} · AT: ${moneyFull(r.totalActivos)}` }))))),
+            tab === "resultados" && (React.createElement("div", { style: { maxWidth: 700 } },
+                React.createElement("div", { style: { background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 16, overflow: "hidden" } },
+                    React.createElement("div", { style: { background: `linear-gradient(135deg,${T.bgPanel},${T.bgCard})`, padding: "20px 24px", borderBottom: `1px solid ${T.border}`, textAlign: "center" } },
+                        logo && React.createElement("img", { src: logo, alt: "", style: { height: 40, objectFit: "contain", display: "block", margin: "0 auto 10px" } }),
+                        React.createElement("div", { style: { fontSize: 16, fontWeight: 800, color: T.white } }, data.empresa),
+                        React.createElement("div", { style: { fontSize: 11, color: T.muted, marginTop: 2 } },
+                            "NIT ",
+                            data.nit),
+                        React.createElement("div", { style: { fontSize: 13, fontWeight: 600, color: T.accent, marginTop: 6 } },
+                            "Estado de Resultados \u00B7 ",
+                            data.periodo)),
+                    React.createElement("div", { style: { padding: "24px" } },
+                        [
+                            { section: "INGRESOS OPERACIONALES", items: ingresos, total: r.totalIngresos, tc: T.teal, neg: false },
+                            { section: "(-) DEVOLUCIONES", items: devoluciones, total: r.totalDevoluciones, tc: T.red, neg: true },
+                            { section: "(-) COSTO DE VENTAS", items: costos, total: r.totalCostoVentas, tc: T.red, neg: true },
+                            { section: "(-) GASTOS OPERACIONALES", items: gastos, total: r.totalGastos, tc: T.gold, neg: true },
+                        ].map((block, bi) => (React.createElement("div", { key: bi, style: { marginBottom: 16 } },
+                            React.createElement("div", { style: { fontSize: 9, fontWeight: 800, color: T.muted, textTransform: "uppercase", letterSpacing: "0.12em", padding: "6px 0", borderBottom: `1px solid ${T.border}`, marginBottom: 6 } }, block.section),
+                            block.items.map((c, i) => (React.createElement("div", { key: i, style: { display: "flex", justifyContent: "space-between", padding: "5px 12px", borderBottom: `1px solid ${T.border}20`, background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)" } },
+                                React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center" } },
+                                    React.createElement("span", { style: { fontSize: 10, color: T.muted, fontFamily: "monospace" } }, c.codigo),
+                                    React.createElement("span", { style: { fontSize: 11, color: T.dimtxt } }, c.nombre)),
+                                React.createElement("span", { style: { fontSize: 11, fontFamily: "monospace", color: block.neg ? T.red : T.teal, fontWeight: 600 } },
+                                    block.neg ? "(" : "",
+                                    moneyFull(c.saldoFinal),
+                                    block.neg ? ")" : "")))),
+                            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "8px 12px", background: T.bgPanel, borderRadius: 8, marginTop: 6 } },
+                                React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: T.white } }, "Subtotal"),
+                                React.createElement("span", { style: { fontSize: 12, fontFamily: "monospace", fontWeight: 700, color: block.tc } }, moneyFull(block.total)))))),
+                        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "12px 16px", background: `${T.accent}15`, border: `1px solid ${T.accent}30`, borderRadius: 10, marginBottom: 12 } },
+                            React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: T.white } }, "= UTILIDAD BRUTA"),
+                            React.createElement("span", { style: { fontSize: 14, fontFamily: "monospace", fontWeight: 800, color: T.accent } }, moneyFull(r.utilidadBruta))),
+                        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "16px 20px", background: `linear-gradient(135deg,${utilColor}20,${utilColor}10)`, border: `2px solid ${utilColor}50`, borderRadius: 12 } },
+                            React.createElement("div", null,
+                                React.createElement("div", { style: { fontSize: 14, fontWeight: 800, color: T.white } }, "= UTILIDAD NETA DEL PER\u00CDODO"),
+                                React.createElement("div", { style: { fontSize: 10, color: T.muted, marginTop: 3 } },
+                                    "Margen neto: ",
+                                    pct(r.utilidadNeta, r.ingresosNetos),
+                                    "% \u00B7 ",
+                                    data.periodo)),
+                            React.createElement("span", { style: { fontSize: 22, fontFamily: "monospace", fontWeight: 900, color: utilColor } }, moneyFull(r.utilidadNeta))))))),
+            tab === "cuentas" && (React.createElement("div", null,
+                React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 } },
+                    React.createElement("div", { style: { fontSize: 12, color: T.dimtxt } },
+                        filtered.length,
+                        " cuentas auxiliares"),
+                    React.createElement("input", { value: search, onChange: e => setSearch(e.target.value), placeholder: "Buscar por c\u00F3digo o nombre...", style: { background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 10, padding: "8px 14px", color: T.white, fontSize: 12, width: 280, outline: "none" } })),
+                React.createElement("div", { style: { background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 16, overflow: "hidden" } },
+                    React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 11 } },
+                        React.createElement("thead", null,
+                            React.createElement("tr", { style: { background: T.bgPanel } }, ["Código", "Nombre cuenta", "Tipo", "Débito", "Crédito", "Saldo final"].map((h, i) => (React.createElement("th", { key: i, style: { padding: "11px 14px", color: T.muted, fontWeight: 700, fontSize: 9, textTransform: "uppercase", letterSpacing: "0.08em", textAlign: i > 2 ? "right" : "left", borderBottom: `1px solid ${T.border}` } }, h))))),
+                        React.createElement("tbody", null, filtered.map((c, i) => (React.createElement("tr", { key: i, style: { borderBottom: `1px solid ${T.border}20`, background: i % 2 === 0 ? "transparent" : `${T.bgPanel}66` } },
+                            React.createElement("td", { style: { padding: "9px 14px", color: T.muted, fontFamily: "monospace", fontSize: 10, letterSpacing: "0.05em" } }, c.codigo),
+                            React.createElement("td", { style: { padding: "9px 14px", color: T.white, maxWidth: 260 } }, c.nombre),
+                            React.createElement("td", { style: { padding: "9px 14px" } },
+                                React.createElement(Pill, { tipo: c.tipo })),
+                            React.createElement("td", { style: { padding: "9px 14px", textAlign: "right", color: c.debito > 0 ? T.white : T.muted, fontFamily: "monospace", fontSize: 10 } }, c.debito > 0 ? moneyFull(c.debito) : "—"),
+                            React.createElement("td", { style: { padding: "9px 14px", textAlign: "right", color: c.credito > 0 ? T.teal : T.muted, fontFamily: "monospace", fontSize: 10 } }, c.credito > 0 ? moneyFull(c.credito) : "—"),
+                            React.createElement("td", { style: { padding: "9px 14px", textAlign: "right", fontFamily: "monospace", fontSize: 11, fontWeight: 700, color: c.tipo === "INGRESO" ? T.teal : ["GASTO", "COSTO", "DEVOLUCION"].includes(c.tipo) ? T.red : T.white } }, moneyFull(c.saldoFinal)))))))))),
+            tab === "gastos" && (React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1.2fr 0.8fr", gap: 16 } },
+                React.createElement("div", { style: { background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 16, padding: 22 } },
+                    React.createElement("div", { style: { fontSize: 10, color: T.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 18 } }, "Detalle de gastos operacionales"),
+                    gastosSort.map((g, i) => React.createElement(Bar, { key: i, label: g.nombre, value: g.saldoFinal, maxVal: maxG, i: i }))),
+                React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 14 } },
+                    React.createElement("div", { style: { background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 16, padding: 20 } },
+                        React.createElement("div", { style: { fontSize: 10, color: T.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 14 } }, "Por categor\u00EDa"),
+                        (() => {
+                            const kws = ["nomin", "prestador", "publicidad", "facebook", "market", "arrend", "local", "ica", "impuest", "industria", "bancari", "interes", "comisi", "honorari", "asesori"];
+                            return [
+                                { l: "Nómina / Personal", kw: ["nomin", "prestador"], c: T.accent },
+                                { l: "Publicidad / Mktg", kw: ["publicidad", "facebook", "market"], c: T.gold },
+                                { l: "Arrendamiento", kw: ["arrend", "local", "arriend"], c: T.purple },
+                                { l: "Impuestos / Tasas", kw: ["ica", "impuest", "industria"], c: T.red },
+                                { l: "Servicios / Internet", kw: ["internet", "servicio", "procesa"], c: T.teal },
+                                { l: "Gastos financieros", kw: ["bancari", "interes", "comisi"], c: "#F472B6" },
+                                { l: "Honorarios / Asesoría", kw: ["honorari", "asesori", "contable"], c: "#6EE7B7" },
+                                { l: "Otros gastos", kw: [], c: T.muted },
+                            ].map((cat, ci) => {
+                                const matched = ci < 7 ? gastos.filter(g => cat.kw.some(k => g.nombre.toLowerCase().includes(k))) : gastos.filter(g => !kws.some(k => g.nombre.toLowerCase().includes(k)));
+                                const val = matched.reduce((s, g) => s + g.saldoFinal, 0);
+                                if (!val)
+                                    return null;
+                                const share = parseFloat(pct(val, r.totalGastos));
+                                return (React.createElement("div", { key: ci, style: { marginBottom: 10 } },
+                                    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 } },
+                                        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+                                            React.createElement("div", { style: { width: 6, height: 6, borderRadius: 2, background: cat.c } }),
+                                            React.createElement("span", { style: { fontSize: 11, color: T.dimtxt } }, cat.l)),
+                                        React.createElement("span", { style: { fontSize: 11, fontFamily: "monospace", fontWeight: 700, color: T.white } },
+                                            "$",
+                                            money(val))),
+                                    React.createElement("div", { style: { background: "rgba(255,255,255,0.04)", borderRadius: 4, height: 4 } },
+                                        React.createElement("div", { style: { width: `${share}%`, height: "100%", background: cat.c, borderRadius: 4 } }))));
+                            });
+                        })(),
+                        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", paddingTop: 12, marginTop: 8, borderTop: `1px solid ${T.border}` } },
+                            React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: T.white } }, "Total gastos"),
+                            React.createElement("span", { style: { fontSize: 13, fontWeight: 800, color: T.red, fontFamily: "monospace" } },
+                                "$",
+                                money(r.totalGastos)))),
+                    React.createElement("div", { style: { background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 16, padding: 20, display: "flex", flexDirection: "column", gap: 10 } },
+                        React.createElement("div", { style: { fontSize: 10, color: T.muted, textTransform: "uppercase", letterSpacing: "0.1em" } }, "Ratios"),
+                        [
+                            { l: "Gastos / Ingresos netos", v: pct(r.totalGastos, r.ingresosNetos), c: T.gold },
+                            { l: "Gastos / Ut. bruta", v: pct(r.totalGastos, r.utilidadBruta), c: T.red },
+                            { l: "Admin / Total gastos", v: pct(ind.gastosAdmin, r.totalGastos), c: T.accent },
+                            { l: "Ventas / Total gastos", v: pct(ind.gastosVentas, r.totalGastos), c: T.purple },
+                        ].map((row, i) => (React.createElement("div", { key: i },
+                            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3 } },
+                                React.createElement("span", { style: { color: T.dimtxt } }, row.l),
+                                React.createElement("span", { style: { color: row.c, fontWeight: 700, fontFamily: "monospace" } },
+                                    row.v,
+                                    "%")),
+                            React.createElement("div", { style: { background: "rgba(255,255,255,0.04)", borderRadius: 4, height: 3 } },
+                                React.createElement("div", { style: { width: `${Math.min(100, parseFloat(row.v))}%`, height: "100%", background: row.c, borderRadius: 4 } }))))))))),
+            tab === "obs" && (React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 380px", gap: 16, alignItems: "start" } },
+                React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 14 } },
+                    React.createElement("div", { style: { background: `linear-gradient(135deg,${T.bgPanel},${T.bgCard})`, border: `1px solid ${T.borderHi}`, borderRadius: 16, padding: 24, position: "relative", overflow: "hidden" } },
+                        React.createElement("div", { style: { position: "absolute", top: -30, right: -30, width: 120, height: 120, borderRadius: "50%", background: T.accentGlow, filter: "blur(30px)" } }),
+                        React.createElement("div", { style: { fontSize: 9, color: T.accent, textTransform: "uppercase", letterSpacing: "0.15em", marginBottom: 10, fontWeight: 700 } }, "\uD83D\uDCCB Concepto general del per\u00EDodo"),
+                        React.createElement("p", { style: { fontSize: 14, color: T.white, lineHeight: 1.8, margin: 0 } },
+                            React.createElement("strong", null, data.empresa),
+                            " presenta para el per\u00EDodo de ",
+                            React.createElement("strong", { style: { color: T.accent } }, data.periodo),
+                            " una",
+                            " ",
+                            React.createElement("strong", { style: { color: utilColor } },
+                                r.utilidadNeta >= 0 ? "utilidad" : "pérdida",
+                                " neta de ",
+                                moneyFull(ABS(r.utilidadNeta))),
+                            ", equivalente a un margen neto del ",
+                            React.createElement("strong", { style: { color: T.accent } },
+                                pct(r.utilidadNeta, r.ingresosNetos),
+                                "%"),
+                            " sobre ingresos netos de ",
+                            React.createElement("strong", { style: { color: T.teal } }, moneyFull(r.ingresosNetos)),
+                            ". La utilidad operacional fue ",
+                            React.createElement("strong", { style: { color: T.white } }, moneyFull(r.utilidadOperacional)),
+                            " antes de gastos financieros.")),
+                    (data.observaciones || []).map((obs, i) => {
+                        const cols = [T.accent, T.gold, T.red, T.teal, T.purple];
+                        const icons = ["📌", "⚠️", "✅", "💡", "🎯"];
+                        return (React.createElement("div", { key: i, style: { background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 16, padding: 20, borderLeft: `3px solid ${cols[i % 5]}` } },
+                            React.createElement("div", { style: { fontSize: 9, color: cols[i % 5], textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 8, fontWeight: 700 } },
+                                icons[i % 5],
+                                " Observaci\u00F3n ",
+                                i + 1),
+                            React.createElement("p", { style: { fontSize: 13, color: T.dimtxt, lineHeight: 1.75, margin: 0 } }, obs)));
+                    })),
+                React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 14 } },
+                    React.createElement("div", { style: { background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 16, padding: 20 } },
+                        React.createElement("div", { style: { fontSize: 9, color: T.muted, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 14 } }, "Resumen ejecutivo"),
+                        [
+                            { l: "Ingresos", v: moneyFull(r.totalIngresos), c: T.teal },
+                            { l: "(-) Devoluciones", v: moneyFull(r.totalDevoluciones), c: T.red },
+                            { l: "(-) Costo ventas", v: moneyFull(r.totalCostoVentas), c: T.red },
+                            { l: "= Ut. bruta", v: moneyFull(r.utilidadBruta), c: T.accent, sep: true },
+                            { l: "(-) Gastos", v: moneyFull(r.totalGastos), c: T.gold },
+                            { l: "= UTILIDAD NETA", v: moneyFull(r.utilidadNeta), c: utilColor, bold: true, sep: true },
+                        ].map((row, i) => (React.createElement("div", { key: i, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: row.sep ? "10px 0" : "6px 0", borderTop: row.sep ? `1px solid ${T.border}` : "none", marginTop: row.sep ? 4 : 0 } },
+                            React.createElement("span", { style: { fontSize: row.bold ? 12 : 11, color: row.bold ? T.white : T.dimtxt, fontWeight: row.bold ? 800 : 400 } }, row.l),
+                            React.createElement("span", { style: { fontSize: row.bold ? 13 : 11, color: row.c, fontWeight: row.bold ? 800 : 600, fontFamily: "monospace" } }, row.v))))),
+                    React.createElement("div", { style: { background: `linear-gradient(135deg,${T.teal}15,${T.accent}10)`, border: `1px solid ${T.teal}30`, borderRadius: 16, padding: 20, textAlign: "center" } },
+                        logo && React.createElement("img", { src: logo, alt: "", style: { height: 36, objectFit: "contain", display: "block", margin: "0 auto 12px" } }),
+                        React.createElement("div", { style: { fontSize: 11, color: T.muted, marginBottom: 4 } }, "An\u00E1lisis preparado por"),
+                        React.createElement("div", { style: { fontSize: 14, fontWeight: 800, color: T.white, marginBottom: 2 } }, "Contador P\u00FAblico"),
+                        React.createElement("div", { style: { fontSize: 10, color: T.muted, marginBottom: 8 } }, "Bajo normas NIIF para Pymes \u2014 Colombia"),
+                        React.createElement("div", { style: { fontSize: 9, color: T.muted, fontFamily: "monospace" } }, "Informes A&M Corporativo")))))),
+        React.createElement("div", { id: "pdf-container", style: { display: "none", position: "fixed", top: 0, left: 0, zIndex: -1, width: "900px", background: T.bg } },
+            React.createElement("div", { id: "pdf-portada", style: { background: `linear-gradient(160deg,#0a1628,${T.bgCard})`, padding: "60px 50px", minHeight: "500px", fontFamily: "'Segoe UI',sans-serif" } },
+                React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 16, marginBottom: 40 } },
+                    logo && React.createElement("img", { src: logo, alt: "", style: { height: 50, objectFit: "contain" } }),
+                    React.createElement("div", null,
+                        React.createElement("div", { style: { fontSize: 32, fontWeight: 900, color: T.white, letterSpacing: "-1px" } },
+                            "Informes ",
+                            React.createElement("span", { style: { color: T.teal } }, "A&M"),
+                            " Corporativo"),
+                        React.createElement("div", { style: { fontSize: 11, color: T.muted, letterSpacing: "0.2em", textTransform: "uppercase" } }, "A&M Soluciones Corporativas SAS"))),
+                React.createElement("div", { style: { borderLeft: `4px solid ${T.teal}`, paddingLeft: 24, marginBottom: 40 } },
+                    React.createElement("div", { style: { fontSize: 28, fontWeight: 800, color: T.white, marginBottom: 8 } }, "Informe Financiero"),
+                    React.createElement("div", { style: { fontSize: 18, color: T.accent, marginBottom: 4 } }, data.empresa),
+                    React.createElement("div", { style: { fontSize: 13, color: T.muted } },
+                        "NIT ",
+                        data.nit,
+                        " \u00B7 ",
+                        data.periodo)),
+                React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 40 } }, [
+                    { l: "Ingresos", v: `$${money(r.totalIngresos)}`, c: T.teal },
+                    { l: "Costo ventas", v: `$${money(r.totalCostoVentas)}`, c: T.red },
+                    { l: "Gastos", v: `$${money(r.totalGastos)}`, c: T.gold },
+                    { l: "Utilidad neta", v: `$${money(r.utilidadNeta)}`, c: r.utilidadNeta >= 0 ? T.accent : T.red },
+                ].map((k, i) => (React.createElement("div", { key: i, style: { background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 12, padding: "16px 14px", borderTop: `3px solid ${k.c}` } },
+                    React.createElement("div", { style: { fontSize: 9, color: T.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 6 } }, k.l),
+                    React.createElement("div", { style: { fontSize: 16, fontWeight: 800, color: k.c, fontFamily: "monospace" } }, k.v))))),
+                React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14 } }, [
+                    { l: "Razón corriente", v: `${ind.razonCorriente.toFixed(2)}x`, c: T.teal },
+                    { l: "Endeudamiento", v: `${(ind.endeudamiento * 100).toFixed(1)}%`, c: T.purple },
+                    { l: "ROE", v: `${ind.roe.toFixed(1)}%`, c: T.gold },
+                    { l: "Rot. inventarios", v: `${ind.rotInventarios.toFixed(2)}x`, c: T.accent },
+                ].map((k, i) => (React.createElement("div", { key: i, style: { background: T.bgPanel, border: `1px solid ${T.border}`, borderRadius: 10, padding: "12px 14px" } },
+                    React.createElement("div", { style: { fontSize: 9, color: T.muted, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 5 } }, k.l),
+                    React.createElement("div", { style: { fontSize: 18, fontWeight: 800, color: k.c, fontFamily: "monospace" } }, k.v))))),
+                React.createElement("div", { style: { marginTop: 50, paddingTop: 20, borderTop: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" } },
+                    React.createElement("div", { style: { fontSize: 11, color: T.muted } },
+                        "Preparado por: ",
+                        React.createElement("span", { style: { color: T.white, fontWeight: 700 } }, "Contador P\u00FAblico")),
+                    React.createElement("div", { style: { fontSize: 10, color: T.muted } }, "Bajo normas NIIF para Pymes \u00B7 Colombia"))),
+            React.createElement("div", { id: "pdf-resultados", style: { background: T.bg, padding: "40px 50px", fontFamily: "'Segoe UI',sans-serif" } },
+                React.createElement("div", { style: { fontSize: 11, color: T.teal, textTransform: "uppercase", letterSpacing: "0.15em", fontWeight: 700, marginBottom: 6 } }, "Estado de Resultados"),
+                React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: T.white, marginBottom: 4 } }, data.empresa),
+                React.createElement("div", { style: { fontSize: 12, color: T.muted, marginBottom: 28 } },
+                    "NIT ",
+                    data.nit,
+                    " \u00B7 ",
+                    data.periodo),
+                [
+                    { section: "INGRESOS OPERACIONALES", items: data.cuentas.filter(c => c.tipo === "INGRESO"), total: r.totalIngresos, tc: T.teal, neg: false },
+                    { section: "(-) DEVOLUCIONES", items: data.cuentas.filter(c => c.tipo === "DEVOLUCION"), total: r.totalDevoluciones, tc: T.red, neg: true },
+                    { section: "(-) COSTO DE VENTAS", items: data.cuentas.filter(c => c.tipo === "COSTO"), total: r.totalCostoVentas, tc: T.red, neg: true },
+                    { section: "(-) GASTOS OPERACIONALES", items: data.cuentas.filter(c => c.tipo === "GASTO"), total: r.totalGastos, tc: T.gold, neg: true },
+                ].map((block, bi) => (React.createElement("div", { key: bi, style: { marginBottom: 20 } },
+                    React.createElement("div", { style: { fontSize: 9, fontWeight: 800, color: T.muted, textTransform: "uppercase", letterSpacing: "0.12em", padding: "6px 0", borderBottom: `1px solid ${T.border}`, marginBottom: 6 } }, block.section),
+                    block.items.map((c, i) => (React.createElement("div", { key: i, style: { display: "flex", justifyContent: "space-between", padding: "5px 12px", borderBottom: `1px solid rgba(99,132,199,0.08)`, background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)" } },
+                        React.createElement("div", { style: { display: "flex", gap: 12 } },
+                            React.createElement("span", { style: { fontSize: 10, color: T.muted, fontFamily: "monospace" } }, c.codigo),
+                            React.createElement("span", { style: { fontSize: 11, color: T.dimtxt } }, c.nombre)),
+                        React.createElement("span", { style: { fontSize: 11, fontFamily: "monospace", color: block.neg ? T.red : T.teal, fontWeight: 600 } }, moneyFull(c.saldoFinal))))),
+                    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "8px 12px", background: T.bgPanel, borderRadius: 8, marginTop: 6 } },
+                        React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: T.white } }, "Subtotal"),
+                        React.createElement("span", { style: { fontSize: 12, fontFamily: "monospace", fontWeight: 700, color: block.tc } }, moneyFull(block.total)))))),
+                React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "12px 16px", background: `${T.accent}15`, border: `1px solid ${T.accent}30`, borderRadius: 10, marginBottom: 12 } },
+                    React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: T.white } }, "= UTILIDAD BRUTA"),
+                    React.createElement("span", { style: { fontSize: 14, fontFamily: "monospace", fontWeight: 800, color: T.accent } }, moneyFull(r.utilidadBruta))),
+                React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "16px 20px", background: `${r.utilidadNeta >= 0 ? T.teal : T.red}20`, border: `2px solid ${r.utilidadNeta >= 0 ? T.teal : T.red}50`, borderRadius: 12 } },
+                    React.createElement("div", null,
+                        React.createElement("div", { style: { fontSize: 14, fontWeight: 800, color: T.white } }, "= UTILIDAD NETA DEL PER\u00CDODO"),
+                        React.createElement("div", { style: { fontSize: 10, color: T.muted, marginTop: 3 } },
+                            "Margen neto: ",
+                            pct(r.utilidadNeta, r.ingresosNetos),
+                            "% \u00B7 ",
+                            data.periodo)),
+                    React.createElement("span", { style: { fontSize: 22, fontFamily: "monospace", fontWeight: 900, color: r.utilidadNeta >= 0 ? T.teal : T.red } }, moneyFull(r.utilidadNeta)))),
+            React.createElement("div", { id: "pdf-indicadores", style: { background: T.bg, padding: "40px 50px", fontFamily: "'Segoe UI',sans-serif" } },
+                React.createElement("div", { style: { fontSize: 11, color: T.accent, textTransform: "uppercase", letterSpacing: "0.15em", fontWeight: 700, marginBottom: 6 } }, "Indicadores Financieros"),
+                React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: T.white, marginBottom: 24 } },
+                    data.empresa,
+                    " \u00B7 ",
+                    data.periodo),
+                [
+                    { cat: "💧 Liquidez", color: T.teal, items: [
+                            { l: "Razón corriente", v: ind.razonCorriente.toFixed(2) + "x", f: `AC(${money(ind.activoCorriente)}) / PC(${money(ind.pasivoCorriente)})`, s: ind.razonCorriente >= 2 ? "✓ Óptimo" : ind.razonCorriente >= 1 ? "⚠ Moderado" : "⚠ Revisar", sc: ind.razonCorriente >= 2 ? T.teal : ind.razonCorriente >= 1 ? T.gold : T.red, i: `Por cada $1 de deuda CP, la empresa tiene $${ind.razonCorriente.toFixed(2)}.` },
+                            { l: "Prueba ácida", v: ind.pruebaAcida.toFixed(2) + "x", f: `(AC-Inv) / PC`, s: ind.pruebaAcida >= 1 ? "✓ Óptimo" : ind.pruebaAcida >= 0.5 ? "⚠ Moderado" : "⚠ Revisar", sc: ind.pruebaAcida >= 1 ? T.teal : ind.pruebaAcida >= 0.5 ? T.gold : T.red, i: `Sin inventarios: $${ind.pruebaAcida.toFixed(2)} por cada $1 de deuda CP.` },
+                            { l: "Razón de efectivo", v: ind.razonEfectivo.toFixed(2) + "x", f: `Efectivo / PC`, s: ind.razonEfectivo >= 0.5 ? "✓ Óptimo" : ind.razonEfectivo >= 0.2 ? "⚠ Moderado" : "⚠ Revisar", sc: ind.razonEfectivo >= 0.5 ? T.teal : ind.razonEfectivo >= 0.2 ? T.gold : T.red, i: `Cobertura inmediata del ${(ind.razonEfectivo * 100).toFixed(1)}% de pasivos corrientes.` },
+                        ] },
+                    { cat: "🏛️ Solvencia", color: T.purple, items: [
+                            { l: "Endeudamiento total", v: (ind.endeudamiento * 100).toFixed(1) + "%", f: `Pasivo Total / Activo Total`, s: ind.endeudamiento <= 0.4 ? "✓ Óptimo" : ind.endeudamiento <= 0.6 ? "⚠ Moderado" : "⚠ Revisar", sc: ind.endeudamiento <= 0.4 ? T.teal : ind.endeudamiento <= 0.6 ? T.gold : T.red, i: `El ${(ind.endeudamiento * 100).toFixed(1)}% de los activos financiado con deuda.` },
+                            { l: "Apalancamiento", v: ind.apalancamiento.toFixed(2) + "x", f: `Pasivo Total / Patrimonio`, s: ind.apalancamiento <= 0.5 ? "✓ Óptimo" : ind.apalancamiento <= 1 ? "⚠ Moderado" : "⚠ Revisar", sc: ind.apalancamiento <= 0.5 ? T.teal : ind.apalancamiento <= 1 ? T.gold : T.red, i: `$${ind.apalancamiento.toFixed(2)} de deuda por cada $1 de patrimonio.` },
+                            { l: "Cobertura intereses", v: ind.coberturaIntereses.toFixed(2) + "x", f: `Util. Operacional / Gastos Financieros`, s: ind.coberturaIntereses >= 2 ? "✓ Óptimo" : ind.coberturaIntereses >= 1 ? "⚠ Moderado" : "⚠ Revisar", sc: ind.coberturaIntereses >= 2 ? T.teal : ind.coberturaIntereses >= 1 ? T.gold : T.red, i: `La utilidad operacional cubre ${ind.coberturaIntereses.toFixed(2)}x los gastos financieros.` },
+                        ] },
+                    { cat: "📈 Rentabilidad", color: T.gold, items: [
+                            { l: "ROE", v: ind.roe.toFixed(2) + "%", f: `Utilidad Neta / Patrimonio × 100`, s: ind.roe >= 15 ? "✓ Óptimo" : ind.roe >= 8 ? "⚠ Moderado" : "⚠ Revisar", sc: ind.roe >= 15 ? T.teal : ind.roe >= 8 ? T.gold : T.red, i: `${ind.roe.toFixed(1)}% de retorno sobre la inversión del propietario.` },
+                            { l: "ROA", v: ind.roa.toFixed(2) + "%", f: `Utilidad Neta / Activo Total × 100`, s: ind.roa >= 10 ? "✓ Óptimo" : ind.roa >= 5 ? "⚠ Moderado" : "⚠ Revisar", sc: ind.roa >= 10 ? T.teal : ind.roa >= 5 ? T.gold : T.red, i: `Por cada $100 en activos se genera $${ind.roa.toFixed(1)} de utilidad.` },
+                            { l: "Margen neto", v: ind.margenNetoInd.toFixed(2) + "%", f: `Utilidad Neta / Ingresos Netos × 100`, s: ind.margenNetoInd >= 15 ? "✓ Óptimo" : ind.margenNetoInd >= 8 ? "⚠ Moderado" : "⚠ Revisar", sc: ind.margenNetoInd >= 15 ? T.teal : ind.margenNetoInd >= 8 ? T.gold : T.red, i: `De cada $100 vendidos, $${ind.margenNetoInd.toFixed(1)} son utilidad neta.` },
+                        ] },
+                    { cat: "⚙️ Gestión", color: T.accent, items: [
+                            { l: "Rotación inventarios", v: ind.rotInventarios.toFixed(2) + "x", f: `Costo Ventas / Inventarios (Gr.14)`, s: ind.rotInventarios >= 4 ? "✓ Óptimo" : ind.rotInventarios >= 2 ? "⚠ Moderado" : "⚠ Revisar", sc: ind.rotInventarios >= 4 ? T.teal : ind.rotInventarios >= 2 ? T.gold : T.red, i: `${ind.rotInventarios.toFixed(2)}x · ${ind.rotInventarios > 0 ? Math.round(365 / ind.rotInventarios) : 0} días promedio en bodega.` },
+                            { l: "Rotación CxC", v: ind.rotCxC.toFixed(2) + "x", f: `Ingresos Netos / Deudores (Gr.13)`, s: ind.rotCxC >= 6 ? "✓ Óptimo" : ind.rotCxC >= 3 ? "⚠ Moderado" : "⚠ Revisar", sc: ind.rotCxC >= 6 ? T.teal : ind.rotCxC >= 3 ? T.gold : T.red, i: `${ind.rotCxC.toFixed(2)}x · ${ind.rotCxC > 0 ? Math.round(365 / ind.rotCxC) : 0} días promedio de cobro.` },
+                            { l: "Rotación activos", v: ind.rotActivos.toFixed(2) + "x", f: `Ingresos Netos / Activo Total`, s: ind.rotActivos >= 1.5 ? "✓ Óptimo" : ind.rotActivos >= 0.8 ? "⚠ Moderado" : "⚠ Revisar", sc: ind.rotActivos >= 1.5 ? T.teal : ind.rotActivos >= 0.8 ? T.gold : T.red, i: `Por cada $1 de activo genera $${ind.rotActivos.toFixed(2)} de ingreso.` },
+                        ] },
+                ].map((group, gi) => (React.createElement("div", { key: gi, style: { marginBottom: 24 } },
+                    React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 12 } },
+                        React.createElement("div", { style: { width: 24, height: 24, borderRadius: 6, background: `${group.color}20`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12 } }, group.cat.split(" ")[0]),
+                        React.createElement("span", { style: { fontSize: 13, fontWeight: 800, color: T.white } }, group.cat.substring(2))),
+                    React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 } }, group.items.map((item, ii) => (React.createElement("div", { key: ii, style: { background: T.bgCard, border: `1px solid ${T.border}`, borderLeft: `3px solid ${item.sc}`, borderRadius: 10, padding: "12px 14px" } },
+                        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 } },
+                            React.createElement("span", { style: { fontSize: 10, fontWeight: 700, color: T.white } }, item.l),
+                            React.createElement("span", { style: { fontSize: 16, fontWeight: 900, color: item.sc, fontFamily: "monospace" } }, item.v)),
+                        React.createElement("div", { style: { fontSize: 8, color: T.muted, fontFamily: "monospace", marginBottom: 4 } }, item.f),
+                        React.createElement("div", { style: { fontSize: 8, color: item.sc, fontWeight: 600, marginBottom: 4 } }, item.s),
+                        React.createElement("div", { style: { fontSize: 9, color: T.dimtxt, lineHeight: 1.4 } }, item.i))))))))),
+            React.createElement("div", { id: "pdf-gastos", style: { background: T.bg, padding: "40px 50px", fontFamily: "'Segoe UI',sans-serif" } },
+                React.createElement("div", { style: { fontSize: 11, color: T.gold, textTransform: "uppercase", letterSpacing: "0.15em", fontWeight: 700, marginBottom: 6 } }, "An\u00E1lisis de Gastos"),
+                React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: T.white, marginBottom: 24 } },
+                    data.empresa,
+                    " \u00B7 ",
+                    data.periodo),
+                React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 } },
+                    React.createElement("div", { style: { background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 12, padding: 20 } },
+                        React.createElement("div", { style: { fontSize: 10, color: T.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 14 } }, "Detalle por cuenta"),
+                        [...data.cuentas.filter(c => c.tipo === "GASTO")].sort((a, b) => b.saldoFinal - a.saldoFinal).map((g, i) => {
+                            const maxG2 = Math.max(...data.cuentas.filter(c => c.tipo === "GASTO").map(x => x.saldoFinal), 1);
+                            const w = (g.saldoFinal / maxG2) * 100;
+                            const colors2 = ["#4F9EFF", "#00E5C3", "#FFB547", "#FF5E7A", "#A78BFA", "#F472B6", "#6EE7B7"];
+                            return (React.createElement("div", { key: i, style: { marginBottom: 8 } },
+                                React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 10, marginBottom: 3 } },
+                                    React.createElement("span", { style: { color: T.dimtxt, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, g.nombre),
+                                    React.createElement("span", { style: { color: T.white, fontFamily: "monospace", fontWeight: 600 } },
+                                        "$",
+                                        money(g.saldoFinal))),
+                                React.createElement("div", { style: { background: "rgba(255,255,255,0.04)", borderRadius: 4, height: 5 } },
+                                    React.createElement("div", { style: { width: `${w}%`, height: "100%", background: colors2[i % colors2.length], borderRadius: 4 } }))));
+                        })),
+                    React.createElement("div", null,
+                        React.createElement("div", { style: { background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 12, padding: 20, marginBottom: 12 } },
+                            React.createElement("div", { style: { fontSize: 10, color: T.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 } }, "Ratios de gasto"),
+                            [
+                                { l: "Gastos / Ingresos netos", v: pct(r.totalGastos, r.ingresosNetos) + "%", c: T.gold },
+                                { l: "Gastos admin / Total", v: pct(ind.gastosAdmin, r.totalGastos) + "%", c: T.accent },
+                                { l: "Gastos ventas / Total", v: pct(ind.gastosVentas, r.totalGastos) + "%", c: T.purple },
+                                { l: "Gastos financieros / Total", v: pct(ind.gastosFinancieros, r.totalGastos) + "%", c: T.red },
+                            ].map((row, i) => (React.createElement("div", { key: i, style: { display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px solid ${T.border}` } },
+                                React.createElement("span", { style: { fontSize: 11, color: T.dimtxt } }, row.l),
+                                React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: row.c, fontFamily: "monospace" } }, row.v)))),
+                            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", paddingTop: 10, marginTop: 4 } },
+                                React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: T.white } }, "Total gastos"),
+                                React.createElement("span", { style: { fontSize: 13, fontWeight: 800, color: T.red, fontFamily: "monospace" } },
+                                    "$",
+                                    money(r.totalGastos)))),
+                        React.createElement("div", { style: { background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 12, padding: 20 } },
+                            React.createElement("div", { style: { fontSize: 10, color: T.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 } }, "Estructura de gastos"),
+                            [
+                                { l: "Administración (Gr.51)", v: ind.gastosAdmin, c: T.accent },
+                                { l: "Ventas (Gr.52)", v: ind.gastosVentas, c: T.purple },
+                                { l: "Financieros (Gr.53)", v: ind.gastosFinancieros, c: T.red },
+                            ].map((row, i) => {
+                                const share = (row.v / r.totalGastos) * 100;
+                                return (React.createElement("div", { key: i, style: { marginBottom: 10 } },
+                                    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3 } },
+                                        React.createElement("span", { style: { color: T.dimtxt } }, row.l),
+                                        React.createElement("span", { style: { fontWeight: 700, color: row.c, fontFamily: "monospace" } },
+                                            "$",
+                                            money(row.v))),
+                                    React.createElement("div", { style: { background: "rgba(255,255,255,0.04)", borderRadius: 4, height: 5 } },
+                                        React.createElement("div", { style: { width: `${share}%`, height: "100%", background: row.c, borderRadius: 4 } }))));
+                            }))))),
+            React.createElement("div", { id: "pdf-obs", style: { background: T.bg, padding: "40px 50px", fontFamily: "'Segoe UI',sans-serif" } },
+                React.createElement("div", { style: { fontSize: 11, color: T.teal, textTransform: "uppercase", letterSpacing: "0.15em", fontWeight: 700, marginBottom: 6 } }, "An\u00E1lisis del Contador"),
+                React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: T.white, marginBottom: 24 } },
+                    data.empresa,
+                    " \u00B7 ",
+                    data.periodo),
+                React.createElement("div", { style: { background: `linear-gradient(135deg,${T.bgPanel},${T.bgCard})`, border: `1px solid ${T.borderHi}`, borderRadius: 14, padding: 22, marginBottom: 16 } },
+                    React.createElement("div", { style: { fontSize: 9, color: T.accent, textTransform: "uppercase", letterSpacing: "0.15em", marginBottom: 8, fontWeight: 700 } }, "\uD83D\uDCCB Concepto general del per\u00EDodo"),
+                    React.createElement("p", { style: { fontSize: 13, color: T.white, lineHeight: 1.8, margin: 0 } },
+                        data.empresa,
+                        " presenta para el per\u00EDodo de ",
+                        data.periodo,
+                        " una ",
+                        r.utilidadNeta >= 0 ? "utilidad" : "pérdida",
+                        " neta de ",
+                        moneyFull(ABS(r.utilidadNeta)),
+                        ", equivalente a un margen neto del ",
+                        pct(r.utilidadNeta, r.ingresosNetos),
+                        "% sobre ingresos netos de ",
+                        moneyFull(r.ingresosNetos),
+                        ". La utilidad operacional fue ",
+                        moneyFull(r.utilidadOperacional),
+                        " antes de gastos financieros.")),
+                (data.observaciones || []).map((obs, i) => {
+                    const cols2 = [T.accent, T.gold, T.red, T.teal, T.purple];
+                    const icons2 = ["📌", "⚠️", "✅", "💡", "🎯"];
+                    return (React.createElement("div", { key: i, style: { background: T.bgCard, border: `1px solid ${T.border}`, borderLeft: `3px solid ${cols2[i % 5]}`, borderRadius: 12, padding: 18, marginBottom: 12 } },
+                        React.createElement("div", { style: { fontSize: 9, color: cols2[i % 5], textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 6, fontWeight: 700 } },
+                            icons2[i % 5],
+                            " Observaci\u00F3n ",
+                            i + 1),
+                        React.createElement("p", { style: { fontSize: 12, color: T.dimtxt, lineHeight: 1.7, margin: 0 } }, obs)));
+                }),
+                React.createElement("div", { style: { marginTop: 30, paddingTop: 20, borderTop: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" } },
+                    logo && React.createElement("img", { src: logo, alt: "", style: { height: 32, objectFit: "contain" } }),
+                    React.createElement("div", { style: { textAlign: "right" } },
+                        React.createElement("div", { style: { fontSize: 11, color: T.white, fontWeight: 700 } }, "Contador P\u00FAblico"),
+                        React.createElement("div", { style: { fontSize: 9, color: T.muted } }, "Bajo normas NIIF para Pymes \u00B7 Colombia \u00B7 A&M Soluciones Corporativas SAS")))))));
+}
+function App() {
+    const [result, setResult] = useState(null);
+    return (React.createElement("div", { style: { background: T.bg, minHeight: "100vh", color: T.white, fontFamily: "'Segoe UI',system-ui,sans-serif" } },
+        React.createElement("style", null, `
+        *{box-sizing:border-box;margin:0;padding:0}
+        ::-webkit-scrollbar{width:5px;height:5px}
+        ::-webkit-scrollbar-track{background:${T.bg}}
+        ::-webkit-scrollbar-thumb{background:${T.bgPanel};border-radius:3px}
+        button:focus{outline:none}
+        input:focus{outline:2px solid ${T.accent}40}
+        tr:hover td{background:rgba(79,158,255,0.03)!important}
+      `),
+        result
+            ? React.createElement(Dashboard, { data: result, onReset: () => setResult(null) })
+            : React.createElement(UploadScreen, { onResult: setResult })));
+}
+window.App = App;
+
+  </script>
+
+  <script>
+    try {
+      var root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(React.createElement(window.App));
+      var s = document.getElementById('splash');
+      s.style.opacity = '0';
+      setTimeout(function(){ s.style.display = 'none'; }, 500);
+    } catch(e) {
+      document.getElementById('splash').innerHTML =
+        '<div style="color:#FF5E7A;text-align:center;padding:40px;max-width:520px">' +
+        '<div style="font-size:40px;margin-bottom:16px">&#9888;</div>' +
+        '<div style="font-size:18px;font-weight:700;color:#F0F4FF;margin-bottom:12px">Error al iniciar</div>' +
+        '<div style="font-size:11px;color:#8BA0CC;font-family:monospace;background:#0D1629;' +
+        'padding:14px;border-radius:8px;border:1px solid rgba(255,94,122,0.3);word-break:break-all">' +
+        e.message + '</div></div>';
+      console.error('Error:', e);
+    }
+  </script>
+</body>
+</html>
